@@ -1,3 +1,4 @@
+# from operator import index
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.anchorlayout import AnchorLayout
@@ -146,7 +147,7 @@ class MainScreen(Screen):
 
         root = BoxLayout(orientation='vertical')
 
-        # Top Search Bar
+        
         top_bar = AnchorLayout(
             anchor_x='center',
             anchor_y='top',
@@ -157,11 +158,10 @@ class MainScreen(Screen):
         top_bar.add_widget(SearchBar())
         root.add_widget(top_bar)
 
-        # Bottom White Bar
         white_bar = WhiteBar()
         root.add_widget(white_bar)
 
-        # Bind buttons inside WhiteBar
+        
         self.bind_white_bar_buttons(white_bar)
 
         self.add_widget(root)
@@ -169,7 +169,8 @@ class MainScreen(Screen):
     def bind_white_bar_buttons(self, white_bar):
         for child in white_bar.walk():
             if isinstance(child, Button):
-                child.bind(on_press=self.go_to_new_window)
+                if child.background_normal=="bests.png":
+                    child.bind(on_press=self.go_to_new_window)
 
     def go_to_new_window(self, instance):
         App.get_running_app().sm.current = 'Популярные маршруты'
@@ -216,35 +217,49 @@ class RouteWindow(Screen):
 
 
         self.title_label = Label(
-            text="Загрузка...",
+            text=" ",
             font_size=14,
             color=(0, 0, 0, 1),
             size_hint_y=None,
             height=50
         )
+
+        
         self.layout.add_widget(self.title_label)
         
+        float_layout = FloatLayout()
+
+
         btn_back = Button(
-            text="Назад",
-            size_hint_y=None,
-            height=50,
-            on_press=self.go_back
+            background_normal="exit.png",
+            background_down="exit.png",
+            size_hint=(None, None),
+            size=(60,53),
+            pos=(730,550),
+            background_color=(1, 1, 1, 1),
+            color=(0, 0, 0, 1)
         )
 
-        self.layout.add_widget(btn_back)
+        btn_back.bind(
+            on_press=lambda x: setattr(App.get_running_app().sm, 'current', 'Популярные маршруты')
+        )
+
+        float_layout.add_widget(btn_back)
+        self.layout.add_widget(float_layout)
         
         self.add_widget(self.layout)
 
+
     def set_route(self, route_id):
         
-        self.title_label.text = f"Информация о Маршруте {route_id}"
+            self.title_label.text = f"Информация о маршруте '{route_id}' "
+        
 
-    def go_back(self, instance):
-        App.get_running_app().sm.current = 'Популярные маршруты'
+
 
     def update_bg(self, *args):
-        self.bg.pos = self.pos
-        self.bg.size = self.size 
+            self.bg.pos = self.pos
+            self.bg.size = self.size 
 
 
 class NewWindowScreen(Screen):
@@ -262,11 +277,13 @@ class NewWindowScreen(Screen):
         
         top_bar = BoxLayout(size_hint_y=None, height=50)
 
+        f_l=FloatLayout()
         
         btn_back = Button(
             background_normal="exit.png",
             background_down="exit.png",
-            size_hint=(None, 1),
+            size_hint=(None,1),
+            pos=(730,550),
             width=60,
             background_color=(1, 1, 1, 1),
             color=(0, 0, 0, 1)
@@ -276,31 +293,34 @@ class NewWindowScreen(Screen):
             on_press=lambda x: setattr(App.get_running_app().sm, 'current', 'Карта')
         )
 
-        
         title_label = Label(
             text="Популярные направления",
             color=(0, 0, 0, 1),
             font_size=20,
+            pos=(0,550),
             bold=True
         )
-
-        top_bar.add_widget(btn_back)
-        top_bar.add_widget(title_label)
+        
+        f_l.add_widget(title_label)
+        f_l.add_widget(btn_back)
+        top_bar.add_widget(f_l)
         main_layout.add_widget(top_bar)
 
         content_layout = BoxLayout(orientation='vertical', size_hint_y=None, spacing=10)
         content_layout.bind(minimum_height=content_layout.setter('height'))
 
-        for i in range(5):
-            route_id = i + 1
+        des=["Красная площадь","Парк Сокольники","ВДНХ","Останкино","Зарядье"]
+
+        for i in range(0,len(des)):
+            
             item = RoundedButton(
-                text=f"Маршрут {route_id}",
+                text=f"Маршрут {des[i]}",
                 size_hint_y=None,
                 height=100,
             )
     
     
-            def on_route_press(instance, rid=route_id):  
+            def on_route_press(instance, rid=des[i]):  
                 app = App.get_running_app()
                 route_screen = app.sm.get_screen('route_window')
                 route_screen.set_route(rid)  
