@@ -1,22 +1,41 @@
 # from operator import index
+from platform import node
+from pprint import pp
+from turtle import shape
+from unittest import result
+from kivy_garden.mapview import MapView, MapMarker,MapLayer
+from tracemalloc import start
+from weakref import ref
+from kivy.uix.popup import Popup
+from kivy import app
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
-from kivy.graphics import Color, RoundedRectangle, Line, Rectangle
+from kivy.graphics import Color, RoundedRectangle, Line, Rectangle,Ellipse
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.image import AsyncImage
 from kivy.clock import Clock
-# from api_client import MapsAPIClient
-# from navigation_client import NavigationAPIClient
+import requests
+from api_client import MapsAPIClient
+from navigation_client import NavigationAPIClient
+from area_api import calculate_area_km2
+import math
+import asyncio
+from places_api import find_nearby, filter_by_metro
+
+
+
+
+
 import threading
 class SearchBar(BoxLayout):
-    def init(self, **kwargs):
-        super().init(**kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.size_hint = (None, None)
         self.size = (300, 40)
         self.padding = [6, 4]
@@ -61,127 +80,525 @@ class SearchBar(BoxLayout):
         self.bg.size = (self.width - 4, self.height - 4)
 
 
+
+    # def on_search_end(self, text):             
+    #     app = App.get_running_app()
+    #     result = app.nav_api.geocode(text)    добавление поиска через Search Bar
+
+    #     if result:
+    #         app.selected_end = {
+    #             "lat": result["lat"],
+    #             "lon": result["lon"]
+    #         }
+    #         print("END:", app.selected_end)
+
+    
+    # def on_search_start(self, text):
+    #     app = App.get_running_app()
+    #     result = app.nav_api.geocode(text)
+
+    #     if result:
+    #         app.selected_start = {
+    #             "lat": result["lat"],
+    #             "lon": result["lon"]
+    #         }
+    #         print("start:", app.selected_start)
+
+    
+    # def on_enter(self, instance):
+    #     text = instance.text.strip()
+
+    #     if not text:
+    #         return
+
+    #     if self.mode == "start":
+    #         self.on_search_start(text)
+    #     else:
+    #         self.on_search_end(text)
+
 class WhiteBar(AnchorLayout):
-    def init(self, **kwargs):
-        super().init(**kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.size_hint_y = None
         self.height = 80
-        self.padding = 10
-
         with self.canvas.before:
             Color(1, 1, 1, 1)
-            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[10])
-        self.bind(pos=self.update_bg, size=self.update_bg)
+            self.bg = Rectangle(pos=self.pos, size=self.size,radius=[10])   
+        
+        self.bind(pos=self.update_bg, size=self.update_bg)  
 
-        center_anchor = AnchorLayout(
-            anchor_x='center',
-            anchor_y='center',
-            size_hint_x=1
-        )
+        center_anchor=AnchorLayout(anchor_x='center', anchor_y='center',size_hint_x=1)
 
-        button_container = BoxLayout(
-            orientation='horizontal',
-            spacing=50,
-            size_hint=(None, None),
-            size=(140, 60)
-        )
+        button_container = BoxLayout(orientation='horizontal', spacing=50, size_hint=(None, None), size=(140, 60))
 
-        btn1 = Button(
-            background_normal="navi.png",
-            background_down="navi.png",
-            size_hint=(None, None),
-            size=(56, 43),
-            border=(1, 1, 1, 1),
-            background_color=(1, 1, 1, 1),
-            color=(0, 0, 0, 1),
-        )
-
+        btn1=Button(background_normal="navi.png", background_down="navi.png", size_hint=(None, None), size=(56, 43), 
+         border=(1,1,1,1),background_color=(1, 1, 1, 1), color=(0, 0, 0, 1))
+        
         with btn1.canvas.after:
-            Color(0, 0, 0, 1)
-            btn1.border_line = Line(
-                rounded_rectangle=(btn1.x, btn1.y, btn1.width, btn1.height, 10),
-                width=0.5
-            )
-        btn1.bind(pos=self.update_border, size=self.update_border)
+            Color(0,0,0,1)
+            btn1.border_line=Line(rounded_rectangle=(btn1.x, btn1.y, btn1.width, btn1.height, 10), width=0.5)
 
-        btn2 = Button(
-            background_normal="bests.png",
-            background_down="bests.png",
-            size_hint=(None, None),
-            size=(56, 43),
-            border=(1, 1, 1, 1),
-            background_color=(1, 1, 1, 1),
-            color=(0, 0, 0, 1)
-        )
+        btn1.bind(pos=self.update_button_border, size=self.update_button_border)
+
+        btn2=Button(background_normal="bests.png", background_down="bests.png", size_hint=(None, None), size=(56, 43),border=(1,1,1,1), background_color=(1, 1, 1, 1), color=(0, 0, 0, 1))
+        
         with btn2.canvas.after:
-            Color(0, 0, 0, 1)
-            btn2.border_line = Line(
-                rounded_rectangle=(btn2.x, btn2.y, btn2.width, btn2.height, 10),
-                width=0.5
-            )
-        btn2.bind(pos=self.update_border, size=self.update_border)
+            Color(0,0,0,1)
+            btn2.border_line=Line(rounded_rectangle=(btn2.x, btn2.y, btn2.width, btn2.height, 10), width=0.5)
+        btn2.bind(pos=self.update_button_border, size=self.update_button_border)
+
+                
 
         button_container.add_widget(btn1)
         button_container.add_widget(btn2)
+        
         center_anchor.add_widget(button_container)
         self.add_widget(center_anchor)
-
-
-def update_bg(self, *args):
-        self.bg.pos = self.pos
-        self.bg.size = self.size
-
-def update_border(self, instance, value):
-    instance.border_line.rounded_rectangle = (
-            instance.x, instance.y,
-            instance.width, instance.height,
-            10
-        )
-
-
-class MapDisplay(BoxLayout):
-    
-
-    def init(self, **kwargs):
-        super().init(**kwargs)
-        self.orientation = 'vertical'
-
-        with self.canvas.before:
-            Color(0.9, 0.9, 0.9, 1)
-            self.bg = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=self.update_bg, size=self.update_bg)
-
-        self.status_label = Label(
-            text="Карта загружается...",
-            size_hint_y=None,
-            height=30,
-            color=(0, 0, 0, 1),
-            font_size='12sp'
-        )
-
-        self.add_widget(self.status_label)
-        # Информация о навигации
-        self.nav_label = Label(
-            text="Навигационная сеть загружается...",
-            size_hint_y=None,
-            height=30,
-            color=(0, 0, 0, 1),
-            font_size='12sp'
-        )
-        self.add_widget(self.nav_label)
-        # Информация о текущей локации
-        self.location_label = Label(
-            text="Текущая локация: неизвестна",
-            size_hint_y=None,
-            height=30,
-            color=(0, 0, 0, 1),
-            font_size='11sp'
-        )
-        self.add_widget(self.location_label)
 
     def update_bg(self, *args):
         self.bg.pos = self.pos
         self.bg.size = self.size
+    
+    def update_button_border(self, instance, *args):
+        instance.border_line.rounded_rectangle = (instance.x, instance.y, instance.width, instance.height, 10)
+
+
+class RoundedButton(Button):
+    def __init__(self, **kwargs):
+
+        super().__init__(**kwargs)
+
+        with self.canvas.after:
+            Color(0, 0, 0, 1)
+            self.border_line = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, 10), width=0.5)
+
+        self.bind(pos=self.update_border, size=self.update_border)
+
+    def update_bg(self, instance, value):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+
+    def update_border(self, instance, value):
+        instance.border_line.rounded_rectangle = (instance.x, instance.y, instance.width, instance.height, 10)
+
+
+
+class MyMapView(MapView):
+        def on_touch_down(self, touch):
+            app = App.get_running_app()
+
+            if not getattr(app, "selecting_route", False):
+                return super().on_touch_down(touch)
+
+            if not self.collide_point(*touch.pos):
+                return super().on_touch_down(touch)
+
+            lat=self.lat
+            lon=self.lon
+        
+            if app.selected_start is None:
+                app.selected_start = {"lat": lat, "lon": lon}
+                self.add_marker(MapMarker(lat=lat, lon=lon))
+                print("A выбрана")
+                return True
+
+        
+            elif app.selected_end is None:
+                app.selected_end = {"lat": lat, "lon": lon}
+                self.add_marker(MapMarker(lat=lat, lon=lon))
+                print("B выбрана")
+
+                app.sm.current = "route_window"
+                return True
+
+            return super().on_touch_down(touch)
+
+
+class RouteLineLayer(MapLayer):
+    def __init__(self, mapview, route_points, **kwargs):
+        super().__init__(**kwargs)
+        self.mapview = mapview
+        self.route_points = route_points
+
+    def reposition(self):
+        self.canvas.clear()
+
+        if not self.route_points:
+            return
+
+        with self.canvas:
+            Color(1, 0, 0, 1)
+
+            points = []
+            for lat, lon in self.route_points:
+                x, y = self.mapview.get_window_xy_from(lat, lon, self.mapview.zoom)
+                points.extend([x, y])
+
+            Line(points=points, width=3)
+
+
+# class CircleMarker(MapMarker):
+#     def __init__(self, **kwargs):
+#         super().__init__(**kwargs)
+
+#         self.size = (20, 20)  
+
+#         with self.canvas:
+#                 Color(1, 0, 0, 0.5)  
+#                 self.circle = Ellipse(pos=self.pos, size=self.size)
+
+#         self.bind(pos=self.update_circle)
+
+#     def update_circle(self, *args):
+#         self.circle.pos = self.pos
+
+
+class CircleMarker(MapMarker):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        self.size = (20, 20)
+
+        with self.canvas:
+            Color(1, 0, 0, 0.5)
+            self.circle = Ellipse(size=self.size)
+
+        Clock.schedule_interval(self.update_circle, 0)
+
+    def update_circle(self, *args):
+        
+        self.circle.pos = (
+            self.center_x - self.width / 2,
+            self.center_y - self.height / 2
+        )
+
+class MapScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.ext_search_mode = False
+
+        layout = FloatLayout()
+
+
+        self.map = MyMapView(
+            lat=55.751244,
+            lon=37.618423,
+            zoom=12,
+            size_hint=(1, 1)
+        )
+
+        self.area_points = []
+        
+        self.map_label = Label(
+            text="",
+            size_hint=(None, None),
+            size=(300, 50),
+            pos_hint={"x": 0.02, "y": 0.9},
+            color=(0, 0, 0, 1)
+            )
+
+        layout.add_widget(self.map)
+        layout.add_widget(self.map_label)
+
+        
+        self.ext_search=RoundedButton(
+            text="Расширенный поиск",
+            size_hint=(None, None),
+            size=(150, 40),
+            pos_hint={"x": 0.02, "y": 0.8},
+            background_normal='',
+            background_down='',
+            background_color=(1,0.65,1,1),
+            color=(1,1,1,1)
+        )
+        
+        layout.add_widget(self.ext_search)
+
+        self.ext_search.bind(on_press=self.start_ext_search)
+        
+
+        self.add_widget(layout)
+        
+        self.place_markers = []
+
+    def start_ext_search(self, instance):
+        self.ext_search_mode = True
+
+    
+    def add_touch_marker(self, lat, lon):
+
+        self.touch_marker = CircleMarker(
+            lat=lat,
+            lon=lon
+        )
+
+        self.map.add_widget(self.touch_marker)
+        return lat, lon
+
+
+
+    def search_touch(self, touch):
+        handled = super().on_touch_down(touch)
+
+        if not self.collide_point(*touch.pos):
+            return handled
+
+
+        if not self.ext_search_mode:
+            return handled
+
+        lat, lon = self.get_latlon_at(*touch.pos)
+
+        Clock.schedule_once(lambda dt: self.add_touch_marker(lat, lon))
+
+        threading.Thread(
+            target=self.search_places,
+            args=(lat, lon),
+            daemon=True
+        ).start()
+
+        return True
+
+
+
+    def search_places(self, lat, lon):
+        try:
+            result = find_nearby(lat, lon, radius_km=5.0)
+
+            places = result["result"]["items"]
+
+    
+            places = filter_by_metro(places)
+
+    
+            places.sort(key=lambda x: (x.get("metro") or "", x.get("distance", 999)))
+
+            Clock.schedule_once(lambda dt: self.show_places_on_map(places), 0)    
+        except Exception as e:
+            print("Ошибка поиска:", e)
+
+    
+    def show_places_on_map(self, places):
+
+
+        for place in places:
+            marker = MapMarker(
+                lat=place["lat"],
+                lon=place["lon"]
+            )
+            self.add_widget(marker)
+            self.place_markers.append(marker)
+
+  
+
+
+    def on_touch_down(self, touch):
+        
+        handled = super().on_touch_down(touch)
+
+        if not self.map.collide_point(*touch.pos):
+                return handled
+
+        
+        if touch.is_double_tap:
+                lat, lon = self.map.get_latlon_at(*touch.pos)
+
+                self.area_points.append({"lat": lat, "lon": lon})
+
+                if len(self.area_points) == 2:
+                    Clock.schedule_once(lambda dt: self.open_shape_popup(), 0)
+
+                return True
+        return handled
+
+  
+    def open_shape_popup(self):
+            layout = BoxLayout(orientation='vertical')
+
+            btn_circle = Button(text="Круг")
+            btn_square = Button(text="Прямоугольник")
+
+            layout.add_widget(btn_circle)
+            layout.add_widget(btn_square)
+
+            popup = Popup(
+            title="Выберите фигуру",
+            content=layout,
+            size_hint=(0.5, 0.5)
+        )
+
+            btn_circle.bind(on_press=lambda x: self.calculate_area("circle", popup))
+            btn_square.bind(on_press=lambda x: self.calculate_area("square", popup))
+
+            popup.open()
+
+   
+    def calculate_area(self, shape, popup):
+        popup.dismiss()
+
+        p1, p2 = self.area_points
+
+        dx = (p1["lon"] - p2["lon"]) * 111000
+        dy = (p1["lat"] - p2["lat"]) * 111000
+
+        radius_m = (dx**2 + dy**2) ** 0.5
+
+        area = calculate_area_km2(radius_m, shape)
+
+        self.map_label.text = f"Площадь ({shape}): {area:.4f} км²"
+
+        self.area_points = []
+
+    def update_bg(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+
+
+class RouteScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        layout = BoxLayout(orientation="vertical")
+
+        self.map = MyMapView(
+            lat=55.751244,
+            lon=37.618423,
+            zoom=12
+        )
+
+        layout.add_widget(self.map)
+
+        btn_go = Button(text="GO", size_hint=(1, 0.1))
+        btn_go.bind(on_press=self.build_route)
+        layout.add_widget(btn_go)
+
+        self.add_widget(layout)
+
+        
+
+    def build_route(self, instance):
+        app = App.get_running_app()
+
+        start = app.selected_start
+        end = app.selected_end
+
+
+        def distance(lat1, lon1, lat2, lon2):
+            return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
+
+        def worker():
+            try:
+                
+                app.nav_api.create_node(start["lat"], start["lon"])
+                app.nav_api.create_node(end["lat"], end["lon"])
+
+                nodes = app.nav_api.get_nodes()
+                edges = app.nav_api.get_edges()
+
+                nodes = nodes["data"]
+                edges = edges["data"]
+
+                node_map = {n["id"]: n for n in nodes}
+
+                edge_nodes = set()
+                for e in edges:
+                    edge_nodes.add(e["from_node"])
+                    edge_nodes.add(e["to_node"])
+
+                
+                def find_nearest(lat, lon):
+                    best = None
+                    best_dist = float("inf")
+
+                    for nid in edge_nodes:
+                        node = node_map.get(nid)
+                        if not node:
+                            continue
+
+                        d = distance(lat, lon, node["lat"], node["lon"])
+
+                        if d < best_dist:
+                            best_dist = d
+                            best = node
+
+                    return best
+
+                start_node = find_nearest(start["lat"], start["lon"])
+                end_node = find_nearest(end["lat"], end["lon"])
+
+               
+
+                
+                route = app.nav_api.calculate_route(
+                    start_lat=start_node["lat"],
+                    start_lon=start_node["lon"],
+                    end_lat=end_node["lat"],
+                    end_lon=end_node["lon"]
+                )
+
+
+                coords = route.get("geometry", {}).get("coordinates", [])
+
+                route_points = [(lat, lon) for lon, lat in coords]
+
+                def update(dt):
+                    
+                    if self.route_layer:
+                        self.map.remove_layer(self.route_layer)
+
+                    self.route_layer = RouteLineLayer(self.map, route_points)
+                    self.map.add_layer(self.route_layer)
+
+                    self.map.center_on(start["lat"], start["lon"])
+
+                Clock.schedule_once(update, 0)
+
+            except Exception as e:
+                print("Ошибка:", e)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def display_route(self, route_data):
+            summary = route_data.get("summary", {})
+
+            distance = summary.get("distance_meters", 0) / 1000
+            duration = summary.get("duration_seconds", 0) / 60
+            latest = app.nav_api.get_latest_location()
+
+            recent_count = 0
+
+            if latest:
+                recent_count = latest.get("recent_routes_count", 0)
+
+            self.route_info.text = (
+              f"Расстояние: {distance:.2f} км\n"
+              f"Время: {duration:.1f} мин\n" 
+              f"Шагов: {summary.get('steps_count', 0)}"
+              f"Недавние маршруты: {recent_count}"
+              f"[ref=clear][color=0000ff]Очистить историю[/color][/ref]"
+            )
+    
+    def on_ref_press(self, instance, ref):
+    
+        if ref == "clear":
+            result = app.nav_api.clear_location_history()
+
+
+
+    def update_bg(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+
+
+
+
+    
+
+    
+    # def draw_route(self, route_coords):
+    #     self.route_layer = RouteLineLayer(self.map, route_coords)
+    #     self.map.add_layer(self.route_layer)
+
 
     def load_map_style(self, style_id=1):
         #Загрузить стиль карты из API
@@ -189,13 +606,15 @@ class MapDisplay(BoxLayout):
 
         def fetch_data():
             # Загружаем стиль карты
-            map_style = app.maps_api.get_style(1)
+            map_style = app.api_client.get_style(1)
 
             # Загружаем навигационную сеть
             nav_nodes = app.nav_api.get_nodes()
 
             # Получаем последнюю локацию
             last_location = app.nav_api.get_latest_location()
+
+           
 
             Clock.schedule_once(
                 lambda dt: self.on_data_loaded(map_style, nav_nodes, last_location), 0
@@ -204,7 +623,7 @@ class MapDisplay(BoxLayout):
         threading.Thread(target=fetch_data, daemon=True).start()
 
     def on_data_loaded(self, map_style, nav_nodes, last_location):
-        #Обработка загруженных данных
+        
         if map_style:
             self.map_label.text = f"✓ Карта: {map_style.get('name', 'Неизвестно')}"
         else:
@@ -223,9 +642,10 @@ class MapDisplay(BoxLayout):
         else:
             self.location_label.text = "✗ Локация не найдена"
 
+
 class MainScreen(Screen):
-    def init(self, **kwargs):
-        super().init(**kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
         root = BoxLayout(orientation='vertical')
 
@@ -240,160 +660,532 @@ class MainScreen(Screen):
         root.add_widget(top_bar)
 
         # Добавляем виджет карты
-        self.map_display = MapDisplay()
+        self.map_display = MapScreen()
         root.add_widget(self.map_display)
         white_bar = WhiteBar()
         root.add_widget(white_bar)
         self.bind_white_bar_buttons(white_bar)
         self.add_widget(root)
 
-    def on_enter(self):
+    # def on_enter(self):
         #Вызывается при входе на экран
-        self.map_display.load_all_data()
+        # self.map_display.load_map_style()
 
     def bind_white_bar_buttons(self, white_bar):
         for child in white_bar.walk():
             if isinstance(child, Button):
                 if child.background_normal == "bests.png":
                     child.bind(on_press=self.go_to_new_window)
+                if child.background_normal == "navi.png":
+                    def start_route(instance):
+                        app = App.get_running_app()
+                        app.selecting_route = True
+                        app.selected_start = None
+                        app.selected_end = None
+                        app.sm.current = "route_window"
+
+                child.bind(on_press=start_route)
 
     def go_to_new_window(self, instance):
         App.get_running_app().sm.current = 'Популярные маршруты'
+        
 
 
-class RoundedButton(Button):
-    def init(self, **kwargs):
-        kwargs.setdefault('background_normal', '')
-        kwargs.setdefault('background_down', '')
-        kwargs.setdefault('color', (0, 0, 0, 1))
-
-        super().init(**kwargs)
-
-        with self.canvas.after:
-            Color(0, 0, 0, 1)
-            self.border_line = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, 10), width=0.5)
-
-        self.bind(pos=self.update_border, size=self.update_border)
-
-    def update_bg(self, instance, value):
-        self.bg.pos = self.pos
-        self.bg.size = self.size
-
-    def update_border(self, instance, value):
-        instance.border_line.rounded_rectangle = (instance.x, instance.y, instance.width, instance.height, 10)
 
 
-class RouteWindow(Screen):
-    def init(self, **kwargs):
-        super().init(**kwargs)
-        self.current_route_name = None
-        self.layout = BoxLayout(orientation='vertical', padding=20)
 
-        with self.canvas.before:
-            Color(1, 1, 1, 1)
-            self.bg = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=self.update_bg, size=self.update_bg)
 
-        self.title_label = Label(
-            text=" ",
-            font_size=14,
-            color=(0, 0, 0, 1),
-            size_hint_y=None,
-            height=50,
-            bold=True
-        )
 
-        self.layout.add_widget(self.title_label)
 
-        self.route_info = Label(
-            text="",
-            font_size=12,
-            color=(0, 0, 0, 1),
-            size_hint_y=None,
-            height=100,
-            halign='left',
-            valign='top'
-        )
-        self.route_info.bind(size=self.route_info.setter('text_size'))
-        self.layout.add_widget(self.route_info)
 
-        float_layout = FloatLayout()
 
-        btn_back = Button(
-            background_normal="exit.png",
-            background_down="exit.png",
-            size_hint=(None, None),
-            size=(60, 53),
-            pos=(730, 550),
-            background_color=(1, 1, 1, 1),
-            color=(0, 0, 0, 1)
-        )
+#  Line Artist
 
-        btn_back.bind(
-            on_press=lambda x: setattr(App.get_running_app().sm, 'current', 'Популярные маршруты')
-        )
+# class RouteLineLayer(MapLayer):
+#     def __init__(self, mapview, route_points, **kwargs):
+#         super().__init__(**kwargs)
+#         self.mapview = mapview
+#         self.route_points = route_points
 
-        float_layout.add_widget(btn_back)
-        self.layout.add_widget(float_layout)
+#     def reposition(self):
+#         self.canvas.clear()
 
-        self.add_widget(self.layout)
+#         if not self.route_points:
+#             return
 
-    def set_route(self, route_id):
-        self.title_label.text = f"Информация о маршруте '{route_id}' "
-        self.load_route_data(route_id)
+#         with self.canvas:
+#             Color(1, 0, 0, 1)  
 
-    def load_route_data(self, route_id):
-        #Загрузить данные маршрута из API
-        app = App.get_running_app()
+#             points = []
+#             for lat, lon in self.route_points:
+#                 x, y = self.mapview.get_window_xy_from(lat, lon, self.mapview.zoom)
+#                 points.extend([x, y])
 
-        # Примерные координаты для демонстрации
-        routes_coords = {
-            "Красная площадь": (55.7558, 37.6173, 55.7520, 37.6175),
-            "Парк Сокольники": (55.7904, 37.6707, 55.7950, 37.6750),
-            "ВДНХ": (55.8304, 37.6278, 55.8350, 37.6320),
-            "Останкино": (55.8196, 37.6119, 55.8240, 37.6160),
-            "Зарядье": (55.7510, 37.6280, 55.7550, 37.6320),
-        }
+#             Line(points=points, width=3)
 
-        if route_id in routes_coords:
-            coords = routes_coords[route_id]
 
-            def fetch_route():
-                route_data = app.api_client.get_map_with_route(
-                    start_lat=coords[0],
-                    start_lon=coords[1],
-                    end_lat=coords[2],
-                    end_lon=coords[3],
-                    routing_type="fastest"
-                )
-                if route_data:
-                    Clock.schedule_once(
-                        lambda dt: self.display_route(route_data), 0
-                    )
 
-            threading.Thread(target=fetch_route, daemon=True).start()
 
-    def display_route(self, route_data):
-        #Отобразить данные маршрута
-        summary = route_data.get('summary', {})
-        distance = summary.get('distance_meters', 0) / 1000
-        duration = summary.get('duration_seconds', 0) / 60
-        steps = route_data.get('steps', [])
 
-        self.route_info.text = (
-            f"Расстояние: {distance:.2f} км\n"
-            f"Время в пути: {duration:.1f} мин\n"
-            f"Шагов: {summary.get('steps_count', 0)}"
-        )
 
-def update_bg(self, *args):
-        self.bg.pos = self.pos
-        self.bg.size = self.size
+# class RouteWindow(Screen):
+    # def __init__(self, **kwargs):
+    #     super().__init__(**kwargs)
+
+    #     self.current_route_name = None
+    #     self.layout = BoxLayout(orientation='vertical', padding=20)
+
+    #     with self.canvas.before:
+    #         Color(1, 1, 1, 1)
+    #         self.bg = Rectangle(pos=self.pos, size=self.size)
+
+    #     self.bind(pos=self.update_bg, size=self.update_bg)
+
+    #     self.title_label = Label(
+    #         text=" ",
+    #         font_size=14,
+    #         color=(0, 0, 0, 1),
+    #         size_hint_y=None,
+    #         height=50,
+    #         bold=True
+    #     )
+
+    #     self.layout.add_widget(self.title_label)
+
+    #     self.route_info = Label(
+    #         text="",
+    #         font_size=12,
+    #         color=(0, 0, 0, 1),
+    #         size_hint_y=None,
+    #         height=100,
+    #         halign='left',
+    #         valign='top',
+    #         markup=True
+    #     )
+    #     self.route_info.bind(size=self.route_info.setter('text_size'),on_ref_press=self.on_ref_press)
+    #     self.layout.add_widget(self.route_info)
+
+    #     float_layout = FloatLayout()
+
+    #     self.btn_back = Button(
+    #         background_normal="exit.png",
+    #         background_down="exit.png",
+    #         size_hint=(None, None),
+    #         size=(60, 53),
+    #         pos=(730, 550)
+    #     )
+
+    #     self.btn_go = Button(
+    #         background_normal="go.png",
+    #         background_down="go.png",
+    #         size_hint=(None, None),
+    #         size=(200, 50),
+    #         pos=(500, 600)
+    #     )
+
+    #     self.btn_go.bind(on_press=self.build_route)
+    #     self.btn_back.bind(
+    #         on_press=lambda x: setattr(App.get_running_app().sm, 'current', 'Популярные маршруты')
+    #     )
+
+    #     float_layout.add_widget(self.btn_back)
+    #     float_layout.add_widget(self.btn_go)
+
+    #     self.layout.add_widget(float_layout)
+    #     self.add_widget(self.layout)
+
+   
+    # def build_route(self, instance):
+        
+
+    #     start = app.selected_start
+    #     end = app.selected_end
+
+       
+
+    #     def distance(lat1, lon1, lat2, lon2):
+    #         return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
+
+        
+    #     app.nav_api.create_node(start["lat"], start["lon"])
+    #     app.nav_api.create_node(end["lat"], end["lon"])
+
+        
+    #     nodes = app.nav_api.get_nodes()
+    #     edges = app.nav_api.get_edges()
+
+
+    #     nodes = nodes["data"]
+    #     edges = edges["data"]
+
+    #     node_map = {n["id"]: n for n in nodes}
+
+    #     edge_nodes = set()
+    #     for edge in edges:
+    #         edge_nodes.add(edge["from_node"])
+    #         edge_nodes.add(edge["to_node"])
+
+        
+    #     def find_nearest(lat, lon):
+    #         best_node = None
+    #         best_dist = float("inf")
+
+    #         for node_id in edge_nodes:
+    #             node = node_map.get(node_id)
+    #             if not node:
+    #                 continue
+
+    #             d = distance(lat, lon, node["lat"], node["lon"])
+
+    #             if d < best_dist:
+    #                 best_dist = d
+    #                 best_node = node
+
+    #         return best_node
+
+    #     start_node = find_nearest(start["lat"], start["lon"])
+    #     end_node = find_nearest(end["lat"], end["lon"])
+
+
+    #     return app.nav_api.calculate_route(start_lat=start_node["lat"],start_lon=start_node["lon"],
+    #         end_lat=end_node["lat"],
+    #         end_lon=end_node["lon"]
+    #     )
+
+    
+    # def on_touch_down(self, touch):
+    #     if touch.is_double_tap:
+            
+
+    #         start = app.selected_start
+    #         end = app.selected_end
+
+            
+
+    #         return app.nav_api.get_route_with_map(
+    #             start_lat=start["lat"],
+    #             start_lon=start["lon"]
+    #             end_lat=end["lat"],
+    #             end_lon=end["lon"]
+    #         )
+
+
+    #     return super().on_touch_down(touch)
+    
+
+    # def double_touch(instance, touch):
+    #     if not touch.is_double_tap:
+            
+
+    #         selected = app.selected_coords
+    #         end = app.selected_end
+
+    #         app.nav_api.create_node(selected["lat"], selected["lon"])
+    #         app.nav_api.create_node(end["lat"], end["lon"])
+
+    #         nodes = app.nav_api.get_nodes()
+    #         edges = app.nav_api.get_edges()
+
+    
+
+    #         nodes = nodes["data"]
+    #         edges = edges["data"]
+
+    
+    #         node_map = {n["id"]: n for n in nodes}
+
+   
+    #         edge_nodes = set()
+
+    #         for edge in edges:
+    #             edge_nodes.add(edge["from_node"])
+    #             edge_nodes.add(edge["to_node"])
+
+    
+    #     def distance(lat1, lon1, lat2, lon2):
+    #         return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
+
+  
+    #     def find_nearest(lat, lon):
+    #         best_node = None
+    #         best_dist = float("inf")
+
+    #         for node_id in edge_nodes:
+    #             node = node_map.get(node_id)
+                      
+    #         d = distance(lat, lon, node["lat"], node["lon"])
+
+    #         if d < best_dist:
+    #             best_dist = d
+    #             best_node = node
+
+    #         return best_node
+
+    
+        
+    #     end_node = find_nearest(end["lat"], end["lon"])
+
+    
+    
+    #     return app.nav_api.calculate_route_from_current(
+    #         end_lat=end_node["lat"],
+    #         end_lon=end_node["lon"]
+    # )
+    
+    # def load_route_data(self, route_id):
+    #     app = App.get_running_app()
+
+    #     routes_coords = {
+    #         "Красная площадь": (55.7558, 37.6173, 55.7520, 37.6175),
+    #         "Парк Сокольники": (55.7904, 37.6707, 55.7950, 37.6750),
+    #     }
+
+    #     if route_id not in routes_coords:
+    #         return
+
+    #     coords = routes_coords[route_id]
+
+    #     def fetch():
+    #         data = app.api_client.get_map_with_route(
+    #             start_lat=coords[0],
+    #             start_lon=coords[1],
+    #             end_lat=coords[2],
+    #             end_lon=coords[3],
+    #             routing_type="fastest"
+    #         )
+
+    #         if data:
+    #             Clock.schedule_once(lambda dt: self.display_route(data), 0)
+
+    #     threading.Thread(target=fetch, daemon=True).start()
+
+
+# Route Window
+
+# class RouteWindow(Screen):
+#         def __init__(self, **kwargs):
+#             super().__init__(**kwargs)
+
+#             layout = BoxLayout(orientation='vertical')
+
+#             self.map = MapView(
+#                 lat=55.751244,
+#                 lon=37.618423,
+#                 zoom=12
+#            )
+#             layout.add_widget(self.map)
+
+#             btn_go = Button(
+#                 background_normal="go.png",
+#                 background_down="go.png",
+#                 size_hint=(1, 0.1)
+#             )
+
+#             btn_go.bind(on_press=self.build_route)  
+#             layout.add_widget(btn_go)
+
+#             self.add_widget(layout)
+
+   
+#         def build_route(self, instance):
+#             app = App.get_running_app()
+
+#             start = app.selected_start
+#             end = app.selected_end
+
+            
+            
+
+#             def worker():
+                
+#                     nodes = app.nav_api.get_nodes()
+#                     edges = app.nav_api.get_edges()
+
+
+#                     nodes = nodes["data"]
+#                     edges = edges["data"]
+
+#                     node_map = {n["id"]: n for n in nodes}
+
+#                     def dist(a, b, c, d):
+#                         return (a - c) ** 2 + (b - d) ** 2
+
+#                     def nearest(lat, lon):
+#                         best = None
+#                         best_d = float("inf")
+
+#                         for e in edges:
+#                             for nid in (e["from_node"], e["to_node"]):
+#                                 node = node_map.get(nid)
+#                                 if not node:
+#                                     continue
+
+#                             d = dist(lat, lon, node["lat"], node["lon"])
+
+#                             if d < best_d:
+#                                 best_d = d
+#                                 best = node
+
+#                             return best
+
+#                     start_node = nearest(start["lat"], start["lon"])
+#                     end_node = nearest(end["lat"], end["lon"])
+                
+                
+                
+#                     route = app.nav_api.calculate_route(
+#                     start_lat=start_node["lat"],
+#                     start_lon=start_node["lon"],
+#                     end_lat=end_node["lat"],
+#                     end_lon=end_node["lon"]
+#                     )
+
+            
+
+#                     coords = route.get("geometry", {}).get("coordinates", [])
+
+#                     route_points = [(lat, lon) for lon, lat in coords]
+
+#                     def update_ui(dt):
+#                         self.draw_route(route_points)
+
+#                     Clock.schedule_once(update_ui, 0)
+
+#             threading.Thread(target=worker, daemon=True).start()
+
+#         def draw_route(self, route_points):
+#             self.map.add_layer(RouteLineLayer(self.map, route_points))   
+
+
+           
+        #     def update_ui(dt):
+        #         if not route:
+        #             self.route_info.text = "Ошибка маршрута"
+        #             return
+
+        #         summary = route.get("summary", {})
+
+        #         dist = summary.get("distance_meters", 0) / 1000
+        #         dur = summary.get("duration_seconds", 0) / 60
+
+        #         self.route_info.text = f"{dist:.2f} км | {dur:.1f} мин"
+
+                
+        #         geometry = route.get("geometry", [])
+
+        #         if geometry:
+        #             points = [(p["lat"], p["lon"]) for p in geometry]
+
+        #             layer = RouteLineLayer(points)
+        #             self.map.add_layer(layer)
+
+        #     Clock.schedule_once(update_ui, 0)
+
+        # threading.Thread(target=worker, daemon=True).start()
+
+    # def double_touch(self, touch):
+    #     if not touch.is_double_tap:
+    #         return super().on_touch_down(touch)
+
+    #     app = App.get_running_app()
+
+    # # 👉 перевод клика в координаты
+    #     lat, lon = self.pixel_to_latlon(*touch.pos)
+
+    # # 👉 создаем узел назначения
+    #     app.nav_api.create_node(lat, lon)
+
+    # # 👉 получаем граф
+    #     nodes = app.nav_api.get_nodes()
+    #     edges = app.nav_api.get_edges()
+
+
+    #     nodes = nodes["data"]
+    #     edges = edges["data"]
+
+    # # 👉 словарь узлов
+    #     node_map = {n["id"]: n for n in nodes}
+
+    # # 👉 только узлы, участвующие в рёбрах
+    #     edge_nodes = set()
+    #     for edge in edges:
+    #         edge_nodes.add(edge["from_node"])
+    #         edge_nodes.add(edge["to_node"])
+
+    # # 👉 расстояние
+    #     def distance(lat1, lon1, lat2, lon2):
+    #         return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
+
+    # # 👉 поиск ближайшего узла
+    #     def find_nearest(lat, lon):
+    #         best_node = None
+    #         best_dist = float("inf")
+
+    #         for node_id in edge_nodes:
+    #             node = node_map.get(node_id)
+    #             if not node:
+    #                 continue
+
+    #             d = distance(lat, lon, node["lat"], node["lon"])
+
+    #             if d < best_dist:
+    #                 best_dist = d
+    #                 best_node = node
+
+    #         return best_node
+
+    
+    #     end_node = find_nearest(lat, lon)
+
+    
+
+    
+    #     route = app.nav_api.calculate_route_from_current(
+    #         end_lat=end_node["lat"],
+    #         end_lon=end_node["lon"]
+    #     )
+
+      
+
+    #     return route
+
+
+
+        # def display_route(self, route_data):
+        #     summary = route_data.get("summary", {})
+
+        #     distance = summary.get("distance_meters", 0) / 1000
+        #     duration = summary.get("duration_seconds", 0) / 60
+        #     latest = app.nav_api.get_latest_location()
+
+        #     recent_count = 0
+
+        #     if latest:
+        #         recent_count = latest.get("recent_routes_count", 0)
+
+        #     self.route_info.text = (
+        #     f"Расстояние: {distance:.2f} км\n"
+        #     f"Время: {duration:.1f} мин\n"
+        #     f"Шагов: {summary.get('steps_count', 0)}"
+        #     f"Недавние маршруты: {recent_count}"
+        #     f"[ref=clear][color=0000ff]Очистить историю[/color][/ref]"
+        # )
+    
+        # def on_ref_press(self, instance, ref):
+        #     if ref == "clear":
+        #         result = app.nav_api.clear_location_history()
+
+
+
+        # def update_bg(self, *args):
+        #     self.bg.pos = self.pos
+        #     self.bg.size = self.size
+
 
 
 class NewWindowScreen(Screen):
-    def init(self, **kwargs):
-        super().init(**kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
         with self.canvas.before:
             Color(1, 1, 1, 1)
@@ -428,13 +1220,14 @@ class NewWindowScreen(Screen):
             bold=True
         )
 
+
         f_l.add_widget(title_label)
         f_l.add_widget(btn_back)
         top_bar.add_widget(f_l)
         main_layout.add_widget(top_bar)
 
         content_layout = BoxLayout(orientation='vertical', size_hint_y=None, spacing=10)
-        content_layout.bind(minimum_height=self.content_layout.setter('height'))
+        content_layout.bind(minimum_height=content_layout.setter('height'))
 
         des = ["Красная площадь", "Парк Сокольники", "ВДНХ", "Останкино", "Зарядье"]
 
@@ -454,12 +1247,23 @@ class NewWindowScreen(Screen):
             item.bind(on_press=on_route_press)
             content_layout.add_widget(item)
 
+        self.more= RoundedButton(
+            text="Достопримечательности рядом",
+            size_hint_y=None,
+            width=100
+
+        )
+
+        
+
         scroll_view = ScrollView(size_hint=(1, 1), bar_color=(0.6, 0.6, 0.6, 1),
                                  bar_inactive_color=(0.8, 0.8, 0.8, 0.8))
         scroll_view.add_widget(content_layout)
-
+        
         main_layout.add_widget(scroll_view)
         self.add_widget(main_layout)
+
+
 
     def update_bg(self, *args):
         self.bg.pos = self.pos
@@ -469,10 +1273,35 @@ class NewWindowScreen(Screen):
 class MyApp(App):
     def build(self):
         # Инициализация API клиента
+        import requests
+
+        self.ext_search_mode = False
+        self.selecting_route = False
+        self.selected_start = None
+        self.selected_end = None
+        app.search_mode = False
+        app.search_markers = []
+
+
+        try:
+            print("CHECK 8001")
+            r = requests.get("http://localhost:8001/api/v1/health", timeout=3)
+            print(r.text)
+        except Exception as e:
+            print("НЕ ДОСТУЧАЛСЯ:", e)
+
+        try:
+            print("CHECK 800")
+            r = requests.get("http://localhost:8000/health", timeout=3)
+            print(r.text)
+        except Exception as e:  
+            print("НЕ ДОСТУЧАЛСЯ too:", e)
+        
         self.api_client = MapsAPIClient(base_url="http://localhost:8000")
         self.nav_api = NavigationAPIClient(base_url="http://localhost:8001")
+
         # Проверка подключения
-        maps_ok = self.maps_api.health_check() is not None
+        maps_ok = self.api_client.health_check() is not None
         nav_ok = self.nav_api.health_check() is not None
         if maps_ok:
             print("✓ Подключение к API успешно")
@@ -486,403 +1315,18 @@ class MyApp(App):
         self.sm = ScreenManager()
         self.sm.add_widget(MainScreen(name='Карта'))
         self.sm.add_widget(NewWindowScreen(name='Популярные маршруты'))
-        self.sm.add_widget(RouteWindow(name='route_window'))
+        self.sm.add_widget(RouteScreen(name='route_window'))
         return self.sm
 
     def on_stop(self):
-        #Закрыть соединение при выходе
-        self.maps_api.close()
+        
+        self.api_client.close()
         self.nav_api.close()
 
-if __name__ == 'main':
+if __name__ == '__main__':
     MyApp().run()  
 
-# import requests
-# from typing import Optional, List, Dict
-# from datetime import datetime
 
-# class MapsAPIClient:
-#     #Клиент для взаимодействия с Maps API
-#     def init(self, base_url: str = "http://localhost:8000"):
-#         self.base_url = base_url
-#         self.session = requests.Session()
-
-#     def get_styles(self) -> Optional[List[Dict]]:
-#         #Получить список всех стилей карт
-#         try:
-#             response = self.session.get(f"{self.base_url}/styles")
-#             response.raise_for_status()
-#             return response.json().get('items', [])
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения стилей: {e}")
-#             return None
-
-#     def get_style(self, style_id: int) -> Optional[Dict]:
-#         #Получить конкретный стиль по ID
-#         try:
-#             response = self.session.get(f"{self.base_url}/styles/{style_id}")
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения стиля {style_id}: {e}")
-#             return None
-
-#     def get_tile_url(self, z: int, x: int, y: int) -> str:
-#         #Получить URL векторного тайла
-#         return f"{self.base_url}/tiles/{z}/{x}/{y}.mvt"
-
-#     def get_map_with_route(
-#             self,
-#             start_lat: float,
-#             start_lon: float,
-#             end_lat: float,
-#             end_lon: float,
-#             routing_type: str = "fastest",
-#             style_id: int = 1
-#     ) -> Optional[Dict]:
-#         #Получить карту с маршрутом
-#         try:
-#             params = {
-#                 "start_lat": start_lat,
-#                 "start_lon": start_lon,
-#                 "end_lat": end_lat,
-#                 "end_lon": end_lon,
-#                 "routing_type": routing_type,
-#                 "style_id": style_id
-#             }
-#             response = self.session.get(
-#                 f"{self.base_url}/map-with-route",
-#                 params=params
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения маршрута: {e}")
-#             return None
-
-#     def save_location(
-#             self,
-#             latitude: float,
-#             longitude: float,
-#             accuracy: float,
-#             altitude: Optional[float] = None,
-#             speed: Optional[float] = None
-#     ) -> Optional[Dict]:
-#         #Сохранить GPS координаты
-#         try:
-#             data = {
-#                 "latitude": latitude,
-#                 "longitude": longitude,
-#                 "accuracy": accuracy,
-#                 "altitude": altitude,
-#                 "speed": speed,
-#                 "timestamp": datetime.now().isoformat()
-#             }
-#             response = self.session.post(
-#                 f"{self.base_url}/location",
-#                 json=data
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка сохранения локации: {e}")
-#             return None
-
-#     def get_location_history(
-#             self,
-#             limit: int = 100,
-#             offset: int = 0
-#     ) -> Optional[List[Dict]]:
-#         #Получить историю локаций
-#         try:
-#             params = {"limit": limit, "offset": offset}
-#             response = self.session.get(
-#                 f"{self.base_url}/location/history",
-#                 params=params
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения истории: {e}")
-#             return None
-
-#     def health_check(self) -> Optional[Dict]:
-#         #Проверить состояние API
-#         try:
-#             response = self.session.get(f"{self.base_url}/health")
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"API недоступен: {e}")
-#             return None
-
-#     def close(self):
-#         #Закрыть сессию
-#         self.session.close()-api_client
-
-
-# class NavigationAPIClient:
-#     #Клиент для взаимодействия с Navigation API
-#     def init(self, base_url: str = "http://localhost:8001"):
-#         self.base_url = base_url
-#         self.session = requests.Session()
-#     def save_location(
-#             self,
-#             latitude: float,
-#             longitude: float,
-#             accuracy: float,
-#             altitude: Optional[float] = None,
-#             speed: Optional[float] = None
-#     ) -> Optional[Dict]:
-#         #Сохранить GPS координаты
-#         try:
-#             data = {
-#                 "latitude": latitude,
-#                 "longitude": longitude,
-#                 "accuracy": accuracy,
-#                 "altitude": altitude,
-#                 "speed": speed,
-#                 "timestamp": datetime.now().isoformat()
-#             }
-#             response = self.session.post(
-#                 f"{self.base_url}/location",
-#                 json=data
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка сохранения локации: {e}")
-#             return None
-
-#     def get_location_history(
-#             self,
-#             limit: int = 100,
-#             offset: int = 0
-#     ) -> Optional[Dict]:
-#         #Получить историю перемещений
-#         try:
-#             params = {"limit": limit, "offset": offset}
-#             response = self.session.get(
-#                 f"{self.base_url}/location/history",
-#                 params=params
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения истории: {e}")
-#             return None
-
-#     def get_latest_location(self) -> Optional[Dict]:
-#         #Получить последнюю известную позицию
-#         try:
-#             response = self.session.get(f"{self.base_url}/location/latest")
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения последней локации: {e}")
-#             return None
-
-#     def clear_location_history(self) -> Optional[Dict]:
-#         #Очистить всю историю перемещений
-#         try:
-#             response = self.session.delete(f"{self.base_url}/location/history")
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка очистки истории: {e}")
-#             return None
-
-#     def get_location_stats(self) -> Optional[Dict]:
-#         #Получить статистику по локациям
-#         try:
-#             response = self.session.get(f"{self.base_url}/location/stats")
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения статистики: {e}")
-#             return None
-
-#     def calculate_route(self, start_lat: float, start_lon: float,
-#             end_lat: float,
-#             end_lon: float,
-#             routing_type: str = "fastest") -> Optional[Dict]:
-#         #Построить маршрут между двумя точками
-#         try:
-#             data = {
-#                 "start": {"lat": start_lat, "lon": start_lon},
-#                 "end": {"lat": end_lat, "lon": end_lon},
-#                 "routing_type": routing_type
-#             }
-#             response = self.session.post(
-#                 f"{self.base_url}/api/v1/route",
-#                 json=data
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка построения маршрута: {e}")
-#             return None
-
-# def calculate_route_from_current(
-#             self,
-#             end_lat: float,
-#             end_lon: float,
-#             routing_type: str = "fastest"
-#     ) -> Optional[Dict]:
-#         #Построить маршрут от текущей позиции
-#         try:
-#             params = {"routing_type": routing_type}
-#             data = {"lat": end_lat, "lon": end_lon}
-#             response = self.session.post(
-#                 f"{self.base_url}/api/v1/route/from-current",
-#                 params=params,
-#                 json=data
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка построения маршрута: {e}")
-#             return None
-
-# def get_route_with_map(
-#             self,
-#             start_lat: float,
-#             start_lon: float,
-#             end_lat: float,
-#             end_lon: float,
-#             routing_type: str = "fastest"
-#     ) -> Optional[Dict]:
-#         #Получить маршрут с данными карты
-#         try:
-#             params = {
-#                 "start_lat": start_lat,
-#                 "start_lon": start_lon,
-#                 "end_lat": end_lat,
-#                 "end_lon": end_lon,
-#                 "routing_type": routing_type
-#             }
-#             response = self.session.get(
-#                 f"{self.base_url}/api/v1/route-with-map",
-#                 params=params
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения маршрута с картой: {e}")
-#             return None
-
-
-# def get_nodes(self) -> Optional[Dict]:
-#         #Получить все узлы навигационной сети
-#         try:
-#             response = self.session.get(f"{self.base_url}/api/v1/nodes")
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения узлов: {e}")
-#             return None
-
-# def get_nearest_node(self, lat: float, lon: float) -> Optional[Dict]:
-#         #Найти ближайший узел к координатам
-#         try:
-#             params = {"lat": lat, "lon": lon}
-#             response = self.session.get(
-#                 f"{self.base_url}/api/v1/nearest",
-#                 params=params
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка поиска ближайшего узла: {e}")
-#             return None
-
-# def create_node(
-#             self,
-#             lat: float,
-#             lon: float,
-#             name: Optional[str] = None,
-#             node_type: str = "intersection"
-#     ) -> Optional[Dict]:
-#         #Создать новый узел
-#         try:
-#             data = {
-#                 "lat": lat,
-#                 "lon": lon,
-#                 "name": name,
-#                 "node_type": node_type
-#             }
-#             response = self.session.post(
-#                 f"{self.base_url}/api/v1/nodes",
-#                 json=data
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка создания узла: {e}")
-#             return None
-
-# def get_edges(self, limit: int = 100, offset: int = 0) -> Optional[Dict]:
-#         #Получить список рёбер
-#         try:
-#             params = {"limit": limit, "offset": offset}
-#             response = self.session.get(
-#                 f"{self.base_url}/api/v1/edges",
-#                 params=params
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения рёбер: {e}")
-#             return None
-        
-# def create_edge(self,from_node: int,to_node: int, distance: Optional[float] = None,
-#             walk_time: Optional[float] = None,
-#             road_type: str = "sidewalk",
-#             is_bidirectional: bool = True
-#     ) -> Optional[Dict]:
-#         #Создать новое ребро
-#         try:
-#             data = {
-#                 "from_node": from_node,
-#                 "to_node": to_node,
-#                 "distance": distance,
-#                 "walk_time": walk_time,
-#                 "road_type": road_type,
-#                 "is_bidirectional": is_bidirectional
-#             }
-#             response = self.session.post(
-#                 f"{self.base_url}/api/v1/edges",
-#                 json=data
-#             )
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка создания ребра: {e}")
-#             return None
-
-# def health_check(self) -> Optional[Dict]:
-#         #Проверить состояние API
-#         try:
-#             response = self.session.get(f"{self.base_url}/api/v1/health")
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Navigation API недоступен: {e}")
-#             return None
-
-# def get_info(self) -> Optional[Dict]:
-#         #Получить информацию об API
-#         try:
-#             response = self.session.get(f"{self.base_url}/")
-#             response.raise_for_status()
-#             return response.json()
-#         except requests.RequestException as e:
-#             print(f"Ошибка получения информации: {e}")
-#             return None
-
-# def close(self):
-#         #Закрыть сессию
-#         self.session.close()-navigation_client
 
 
 
