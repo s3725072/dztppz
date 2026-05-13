@@ -1,7 +1,7 @@
 # from operator import index
+from importlib.resources import path
 from platform import node
-from pprint import pp
-from turtle import shape
+
 from unittest import result
 from kivy_garden.mapview import MapView, MapMarker,MapLayer
 from tracemalloc import start
@@ -20,14 +20,16 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.image import AsyncImage
 from kivy.clock import Clock
+from ray import nodes, worker
 import requests
+import sqlite3
 from api_client import MapsAPIClient
 from navigation_client import NavigationAPIClient
 from area_api import calculate_area_km2
 import math
 import asyncio
 from places_api import find_nearby, filter_by_metro
-
+from route_api import init_database,find_nearest_node, build_graph, dijkstra,get_db, haversine_distance,get_route_steps
 
 
 
@@ -182,59 +184,132 @@ class RoundedButton(Button):
         instance.border_line.rounded_rectangle = (instance.x, instance.y, instance.width, instance.height, 10)
 
 
-
 class MyMapView(MapView):
-        def on_touch_down(self, touch):
-            app = App.get_running_app()
 
-            if not getattr(app, "selecting_route", False):
-                return super().on_touch_down(touch)
+    def on_touch_down(self, touch):
+        app = App.get_running_app()
 
-            if not self.collide_point(*touch.pos):
-                return super().on_touch_down(touch)
-
-            lat=self.lat
-            lon=self.lon
-        
-            if app.selected_start is None:
-                app.selected_start = {"lat": lat, "lon": lon}
-                self.add_marker(MapMarker(lat=lat, lon=lon))
-                print("A выбрана")
-                return True
-
-        
-            elif app.selected_end is None:
-                app.selected_end = {"lat": lat, "lon": lon}
-                self.add_marker(MapMarker(lat=lat, lon=lon))
-                print("B выбрана")
-
-                app.sm.current = "route_window"
-                return True
-
+        if not getattr(app, "selecting_route", False):
             return super().on_touch_down(touch)
+
+        if not self.collide_point(*touch.pos):
+            return super().on_touch_down(touch)
+
+        # координаты места нажатия
+        lat, lon = self.get_latlon_at(*touch.pos)
+
+        if app.selected_start is None:
+            app.selected_start = {"lat": lat, "lon": lon}
+
+            marker_a = MapMarker(lat=lat, lon=lon)
+            self.add_marker(marker_a)
+
+            print("A выбрана")
+            return True
+
+        elif app.selected_end is None:
+            app.selected_end = {"lat": lat, "lon": lon}
+
+            marker_b = MapMarker(lat=lat, lon=lon)
+            self.add_marker(marker_b)
+
+            print("B выбрана")
+
+            app.sm.current = "route_window"
+            return True
+
+        return super().on_touch_down(touch)
+
+
+
+# class MyMapView(MapView):
+#         def on_touch_down(self, touch):
+#             app = App.get_running_app()
+
+#             if not getattr(app, "selecting_route", False):
+#                 return super().on_touch_down(touch)
+
+#             if not self.collide_point(*touch.pos):
+#                 return super().on_touch_down(touch)
+
+#             lat=self.lat
+#             lon=self.lon
+
+#             lat1=self.lat
+#             lon1=self.lon
+        
+#             if app.selected_start is None:
+#                 app.selected_start = {"lat": lat, "lon": lon}
+#                 self.add_marker(MapMarker(lat=lat, lon=lon))
+#                 print("A выбрана")
+#                 return True
+
+        
+#             elif app.selected_end is None:
+#                 app.selected_end = {"lat": lat1, "lon": lon1}
+#                 self.add_marker(MapMarker(lat=lat1, lon=lon1))
+#                 print("B выбрана")
+
+#                 app.sm.current = "route_window"
+#                 return True
+
+#             return super().on_touch_down(touch)
 
 
 class RouteLineLayer(MapLayer):
+
     def __init__(self, mapview, route_points, **kwargs):
         super().__init__(**kwargs)
         self.mapview = mapview
         self.route_points = route_points
 
     def reposition(self):
+
         self.canvas.clear()
 
-        if not self.route_points:
+        if len(self.route_points) < 2:
             return
+
+        points = []
+
+        for lat, lon in self.route_points:
+
+            x, y = self.mapview.get_window_xy_from(
+                lat,
+                lon,
+                self.mapview.zoom
+            )
+
+            points.extend([x, y])
 
         with self.canvas:
             Color(1, 0, 0, 1)
-
-            points = []
-            for lat, lon in self.route_points:
-                x, y = self.mapview.get_window_xy_from(lat, lon, self.mapview.zoom)
-                points.extend([x, y])
-
             Line(points=points, width=3)
+
+
+
+
+# class RouteLineLayer(MapLayer):
+#     def __init__(self, mapview, route_points, **kwargs):
+#         super().__init__(**kwargs)
+#         self.mapview = mapview
+#         self.route_points = route_points
+
+#     def reposition(self):
+#         self.canvas.clear()
+
+#         if not self.route_points:
+#             return
+
+#         with self.canvas:
+#             Color(1, 0, 0, 1)
+
+#             points = []
+#             for lat, lon in self.route_points:
+#                 x, y = self.mapview.get_window_xy_from(lat, lon, self.mapview.zoom)
+#                 points.extend([x, y])
+
+#             Line(points=points, width=3)
 
 
 # class CircleMarker(MapMarker):
@@ -259,18 +334,20 @@ class CircleMarker(MapMarker):
 
         self.size = (20, 20)
 
-        with self.canvas:
+        with self.canvas.after:
             Color(1, 0, 0, 0.5)
             self.circle = Ellipse(size=self.size)
 
-        Clock.schedule_interval(self.update_circle, 0)
+        self.bind(pos=self.update_circle, size=self.update_circle)
+
 
     def update_circle(self, *args):
         
         self.circle.pos = (
-            self.center_x - self.width / 2,
-            self.center_y - self.height / 2
+            self.center_x - self.circle.size[0]  / 2,
+            self.center_y - self.circle.size[1] / 2
         )
+
 
 class MapScreen(Screen):
     def __init__(self, **kwargs):
@@ -333,7 +410,7 @@ class MapScreen(Screen):
         )
 
         self.map.add_widget(self.touch_marker)
-        return lat, lon
+
 
 
 
@@ -457,6 +534,7 @@ class MapScreen(Screen):
 class RouteScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.route_layer = None
 
         layout = BoxLayout(orientation="vertical")
 
@@ -466,7 +544,17 @@ class RouteScreen(Screen):
             zoom=12
         )
 
+        self.nav_label = Label(
+            text="",
+            size_hint=(None, None),
+            size=(300, 50),
+            pos_hint={"x": 0.02, "y": 0.9},
+            color=(1, 1, 1, 1)
+            )
+
+
         layout.add_widget(self.map)
+        layout.add_widget(self.nav_label)
 
         btn_go = Button(text="GO", size_hint=(1, 0.1))
         btn_go.bind(on_press=self.build_route)
@@ -474,91 +562,142 @@ class RouteScreen(Screen):
 
         self.add_widget(layout)
 
-        
 
     def build_route(self, instance):
         app = App.get_running_app()
-
+        
         start = app.selected_start
         end = app.selected_end
 
-
         def distance(lat1, lon1, lat2, lon2):
-            return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
+            return ((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2) ** 0.5
+
+        dist = distance(
+            start["lat"],
+            start["lon"],
+            end["lat"],
+            end["lon"]
+        )
+        
+        print(start["lat"], start["lon"])
+
+        print(end["lat"], end["lon"])
+
+        self.nav_label.text = f"Расстояние: {dist:.4f} (условные единицы)"
+
+        def generate_intermediate_nodes(start, end, num_points=5):
+    
+            nodes = [start]
+
+            for i in range(1, num_points+1):
+                frac = i / (num_points+1)
+                lat = start["lat"] + (end["lat"] - start["lat"]) * frac
+                lon = start["lon"] + (end["lon"] - start["lon"]) * frac
+                nodes.append({"lat": lat, "lon": lon})
+
+            nodes.append(end)
+            return nodes
+
+        def add_generated_nodes_to_db(node_list):
+   
+            node_ids = []
+            with get_db() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+
+                prev_node_id = None
+                prev_lat, prev_lon = None, None
+
+                for node in node_list:
+                    lat, lon = node["lat"], node["lon"]
+            # ищем существующий узел
+                    cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (lat, lon))
+                    row = cursor.fetchone()
+                    if row:
+                        node_id = row["id"]
+                    else:
+                        cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (lat, lon))
+                        node_id = cursor.lastrowid
+
+                    node_ids.append(node_id)
+
+            # создаем ребро с предыдущим узлом
+                    if prev_node_id is not None:
+                        dist = haversine_distance(prev_lat, prev_lon, lat, lon)
+                        walk_time = dist / 1.4
+                        cursor.execute(
+                        'INSERT OR IGNORE INTO edges (from_node,to_node,distance,walk_time,is_bidirectional) VALUES (?, ?, ?, ?, ?)',
+                        (prev_node_id, node_id, dist, walk_time, 1)
+                        )
+                        cursor.execute(
+                        'INSERT OR IGNORE INTO edges (from_node,to_node,distance,walk_time,is_bidirectional) VALUES (?, ?, ?, ?, ?)',
+                        (node_id, prev_node_id, dist, walk_time, 1)
+                        )
+
+                    prev_node_id = node_id
+                    prev_lat, prev_lon = lat, lon
+
+                    conn.commit()
+
+            return node_ids    
+
 
         def worker():
-            try:
-                
-                app.nav_api.create_node(start["lat"], start["lon"])
-                app.nav_api.create_node(end["lat"], end["lon"])
+            init_database()
 
-                nodes = app.nav_api.get_nodes()
-                edges = app.nav_api.get_edges()
+            nodes =generate_intermediate_nodes(start, end, num_points=5)
+            node_ids = add_generated_nodes_to_db(nodes)
 
-                nodes = nodes["data"]
-                edges = edges["data"]
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (start["lat"], start["lon"]))
+                start_node = cursor.fetchone()
+                if start_node:
+                     start_node_id = start_node["id"]
+                else:
+                    cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (start["lat"], start["lon"]))
+                    start_node_id = cursor.lastrowid
+                    conn.commit()   
 
-                node_map = {n["id"]: n for n in nodes}
+                cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (end["lat"], end["lon"]))
+                end_node = cursor.fetchone()
+                if end_node:
+                    end_node_id = end_node["id"]
+                else:
+                    cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (end["lat"], end["lon"]))  
+                    end_node_id = cursor.lastrowid
+                    conn.commit()
 
-                edge_nodes = set()
-                for e in edges:
-                    edge_nodes.add(e["from_node"])
-                    edge_nodes.add(e["to_node"])
+            graph = build_graph()
+            path, _ = dijkstra(graph, start_node_id, end_node_id, routing_type="fastest")
 
-                
-                def find_nearest(lat, lon):
-                    best = None
-                    best_dist = float("inf")
+            route_steps=get_route_steps(path)
 
-                    for nid in edge_nodes:
-                        node = node_map.get(nid)
-                        if not node:
-                            continue
+            route_coordinates = [(step.start_location.lat, step.start_location.lon) for step in route_steps]
 
-                        d = distance(lat, lon, node["lat"], node["lon"])
+            route_coordinates.append((route_steps[-1].end_location.lat, route_steps[-1].end_location.lon))
 
-                        if d < best_dist:
-                            best_dist = d
-                            best = node
-
-                    return best
-
-                start_node = find_nearest(start["lat"], start["lon"])
-                end_node = find_nearest(end["lat"], end["lon"])
-
-               
-
-                
-                route = app.nav_api.calculate_route(
-                    start_lat=start_node["lat"],
-                    start_lon=start_node["lon"],
-                    end_lat=end_node["lat"],
-                    end_lon=end_node["lon"]
-                )
+            total_distance = sum(step.distance for step in route_steps)
+            total_duration = sum(step.duration for step in route_steps)
 
 
-                coords = route.get("geometry", {}).get("coordinates", [])
+            def update(dt):
+                if hasattr(self, "route_layer") and self.route_layer:
+                    self.map.remove_layer(self.route_layer)
+                self.route_layer = RouteLineLayer(self.map, route_coordinates)
+                self.map.add_layer(self.route_layer)
+                self.route_layer.reposition()
+                self.nav_label.text = f"Маршрут: {total_distance:.0f} м, примерно {int(total_duration / 60)} мин"
 
-                route_points = [(lat, lon) for lon, lat in coords]
-
-                def update(dt):
-                    
-                    if self.route_layer:
-                        self.map.remove_layer(self.route_layer)
-
-                    self.route_layer = RouteLineLayer(self.map, route_points)
-                    self.map.add_layer(self.route_layer)
-
-                    self.map.center_on(start["lat"], start["lon"])
-
-                Clock.schedule_once(update, 0)
-
-            except Exception as e:
-                print("Ошибка:", e)
-
+            Clock.schedule_once(update)
         threading.Thread(target=worker, daemon=True).start()
 
-    def display_route(self, route_data):
+
+       
+            
+       
+
+        def display_route(self, route_data):
             summary = route_data.get("summary", {})
 
             distance = summary.get("distance_meters", 0) / 1000
