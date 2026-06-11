@@ -1,7 +1,7 @@
 # from operator import index
 from importlib.resources import path
 from platform import node
-
+import json
 from unittest import result
 from kivy_garden.mapview import MapView, MapMarker,MapLayer
 from tracemalloc import start
@@ -11,6 +11,7 @@ from kivy import app
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.scrollview import ScrollView
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.graphics import Color, RoundedRectangle, Line, Rectangle,Ellipse
@@ -29,7 +30,7 @@ from area_api import calculate_area_km2
 import math
 import asyncio
 from places_api import find_nearby, filter_by_metro
-from route_api import init_database,find_nearest_node, build_graph, dijkstra,get_db, haversine_distance,get_route_steps
+from route_api import init_database,find_nearest_node, build_graph, dijkstra,get_db, haversine_distance,get_route_steps, build_route_geometry
 
 
 
@@ -222,40 +223,6 @@ class MyMapView(MapView):
 
 
 
-# class MyMapView(MapView):
-#         def on_touch_down(self, touch):
-#             app = App.get_running_app()
-
-#             if not getattr(app, "selecting_route", False):
-#                 return super().on_touch_down(touch)
-
-#             if not self.collide_point(*touch.pos):
-#                 return super().on_touch_down(touch)
-
-#             lat=self.lat
-#             lon=self.lon
-
-#             lat1=self.lat
-#             lon1=self.lon
-        
-#             if app.selected_start is None:
-#                 app.selected_start = {"lat": lat, "lon": lon}
-#                 self.add_marker(MapMarker(lat=lat, lon=lon))
-#                 print("A выбрана")
-#                 return True
-
-        
-#             elif app.selected_end is None:
-#                 app.selected_end = {"lat": lat1, "lon": lon1}
-#                 self.add_marker(MapMarker(lat=lat1, lon=lon1))
-#                 print("B выбрана")
-
-#                 app.sm.current = "route_window"
-#                 return True
-
-#             return super().on_touch_down(touch)
-
-
 class RouteLineLayer(MapLayer):
 
     def __init__(self, mapview, route_points, **kwargs):
@@ -285,47 +252,6 @@ class RouteLineLayer(MapLayer):
         with self.canvas:
             Color(1, 0, 0, 1)
             Line(points=points, width=3)
-
-
-
-
-# class RouteLineLayer(MapLayer):
-#     def __init__(self, mapview, route_points, **kwargs):
-#         super().__init__(**kwargs)
-#         self.mapview = mapview
-#         self.route_points = route_points
-
-#     def reposition(self):
-#         self.canvas.clear()
-
-#         if not self.route_points:
-#             return
-
-#         with self.canvas:
-#             Color(1, 0, 0, 1)
-
-#             points = []
-#             for lat, lon in self.route_points:
-#                 x, y = self.mapview.get_window_xy_from(lat, lon, self.mapview.zoom)
-#                 points.extend([x, y])
-
-#             Line(points=points, width=3)
-
-
-# class CircleMarker(MapMarker):
-#     def __init__(self, **kwargs):
-#         super().__init__(**kwargs)
-
-#         self.size = (20, 20)  
-
-#         with self.canvas:
-#                 Color(1, 0, 0, 0.5)  
-#                 self.circle = Ellipse(pos=self.pos, size=self.size)
-
-#         self.bind(pos=self.update_circle)
-
-#     def update_circle(self, *args):
-#         self.circle.pos = self.pos
 
 
 class CircleMarker(MapMarker):
@@ -553,8 +479,19 @@ class RouteScreen(Screen):
             )
 
 
+        self.route_info = Label(
+            text=" ",
+            size_hint=(1, None),
+            height=120,
+            markup=True
+        )
+
+        scroll = ScrollView(size_hint=(1, None), height=120)
+        scroll.add_widget(self.route_info)
+
         layout.add_widget(self.map)
         layout.add_widget(self.nav_label)
+        layout.add_widget(scroll)
 
         btn_go = Button(text="GO", size_hint=(1, 0.1))
         btn_go.bind(on_press=self.build_route)
@@ -562,165 +499,523 @@ class RouteScreen(Screen):
 
         self.add_widget(layout)
 
+        self.route_info.bind(on_ref_press=self.on_ref_press)
+
+
 
     def build_route(self, instance):
+
         app = App.get_running_app()
-        
+
         start = app.selected_start
         end = app.selected_end
 
-        def distance(lat1, lon1, lat2, lon2):
-            return ((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2) ** 0.5
-
-        dist = distance(
-            start["lat"],
-            start["lon"],
-            end["lat"],
-            end["lon"]
-        )
-        
-        print(start["lat"], start["lon"])
-
-        print(end["lat"], end["lon"])
-
-        self.nav_label.text = f"Расстояние: {dist:.4f} (условные единицы)"
-
-        def generate_intermediate_nodes(start, end, num_points=5):
-    
-            nodes = [start]
-
-            for i in range(1, num_points+1):
-                frac = i / (num_points+1)
-                lat = start["lat"] + (end["lat"] - start["lat"]) * frac
-                lon = start["lon"] + (end["lon"] - start["lon"]) * frac
-                nodes.append({"lat": lat, "lon": lon})
-
-            nodes.append(end)
-            return nodes
-
-        def add_generated_nodes_to_db(node_list):
-   
-            node_ids = []
-            with get_db() as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-
-                prev_node_id = None
-                prev_lat, prev_lon = None, None
-
-                for node in node_list:
-                    lat, lon = node["lat"], node["lon"]
-            # ищем существующий узел
-                    cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (lat, lon))
-                    row = cursor.fetchone()
-                    if row:
-                        node_id = row["id"]
-                    else:
-                        cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (lat, lon))
-                        node_id = cursor.lastrowid
-
-                    node_ids.append(node_id)
-
-            # создаем ребро с предыдущим узлом
-                    if prev_node_id is not None:
-                        dist = haversine_distance(prev_lat, prev_lon, lat, lon)
-                        walk_time = dist / 1.4
-                        cursor.execute(
-                        'INSERT OR IGNORE INTO edges (from_node,to_node,distance,walk_time,is_bidirectional) VALUES (?, ?, ?, ?, ?)',
-                        (prev_node_id, node_id, dist, walk_time, 1)
-                        )
-                        cursor.execute(
-                        'INSERT OR IGNORE INTO edges (from_node,to_node,distance,walk_time,is_bidirectional) VALUES (?, ?, ?, ?, ?)',
-                        (node_id, prev_node_id, dist, walk_time, 1)
-                        )
-
-                    prev_node_id = node_id
-                    prev_lat, prev_lon = lat, lon
-
-                    conn.commit()
-
-            return node_ids    
-
-
         def worker():
-            init_database()
+            try:
+                start_lat = start["lat"]
+                start_lon = start["lon"]
 
-            nodes =generate_intermediate_nodes(start, end, num_points=5)
-            node_ids = add_generated_nodes_to_db(nodes)
+                end_lat = end["lat"]
+                end_lon = end["lon"]
 
-            with get_db() as conn:
-                cursor = conn.cursor()
-                cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (start["lat"], start["lon"]))
-                start_node = cursor.fetchone()
-                if start_node:
-                     start_node_id = start_node["id"]
-                else:
-                    cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (start["lat"], start["lon"]))
-                    start_node_id = cursor.lastrowid
-                    conn.commit()   
+                url = (
+                    f"https://router.project-osrm.org/route/v1/driving/"
+                    f"{start_lon},{start_lat};"
+                    f"{end_lon},{end_lat}"
+                    f"?overview=full&geometries=geojson"
+                )
 
-                cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (end["lat"], end["lon"]))
-                end_node = cursor.fetchone()
-                if end_node:
-                    end_node_id = end_node["id"]
-                else:
-                    cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (end["lat"], end["lon"]))  
-                    end_node_id = cursor.lastrowid
-                    conn.commit()
+                response = requests.get(url, timeout=10)
 
-            graph = build_graph()
-            path, _ = dijkstra(graph, start_node_id, end_node_id, routing_type="fastest")
+                if response.status_code != 200:
+                    print("OSRM ERROR:", response.status_code)
+                    return
 
-            route_steps=get_route_steps(path)
+                data = response.json()
 
-            route_coordinates = [(step.start_location.lat, step.start_location.lon) for step in route_steps]
+                if not data.get("routes"):
+                    print("Маршрут не найден")
+                    return
 
-            route_coordinates.append((route_steps[-1].end_location.lat, route_steps[-1].end_location.lon))
+                route = data["routes"][0]
 
-            total_distance = sum(step.distance for step in route_steps)
-            total_duration = sum(step.duration for step in route_steps)
+                distance_m = route["distance"]
+                duration_s = route["duration"]
+
+                coordinates = route["geometry"]["coordinates"]
+
+                route_points = [
+                    (lat, lon)
+                    for lon, lat in coordinates
+                ]
+
+                def update_ui(dt):
+                    self.nav_label.text = (
+                        f"Расстояние: {distance_m / 1000:.2f} км\n"
+                        f"Время: {duration_s / 60:.1f} мин"
+                    )
+
+                    if hasattr(self, "route_layer") and self.route_layer:
+                        self.map.remove_layer(self.route_layer)
+
+                    self.route_layer = RouteLineLayer(
+                        self.map,
+                        route_points
+                    )
+
+                    self.map.add_layer(self.route_layer)
+
+                Clock.schedule_once(update_ui)
+
+            except Exception as e:
+                print("Ошибка маршрута:", e)
+
+        threading.Thread(
+            target=worker,
+            daemon=True
+        ).start()
 
 
-            def update(dt):
-                if hasattr(self, "route_layer") and self.route_layer:
-                    self.map.remove_layer(self.route_layer)
-                self.route_layer = RouteLineLayer(self.map, route_coordinates)
-                self.map.add_layer(self.route_layer)
-                self.route_layer.reposition()
-                self.nav_label.text = f"Маршрут: {total_distance:.0f} м, примерно {int(total_duration / 60)} мин"
+#---------------------------------------------------
 
-            Clock.schedule_once(update)
-        threading.Thread(target=worker, daemon=True).start()
 
+
+    # def build_route(self, instance):
+    #     app = App.get_running_app()
+        
+    #     start = app.selected_start
+    #     end = app.selected_end
+
+    #     print(start)
+    #     print(end)
+
+    #     def distance(lat1, lon1, lat2, lon2):
+    #         return ((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2) ** 0.5
+
+    #     dist = distance(
+    #         start["lat"],
+    #         start["lon"],
+    #         end["lat"],
+    #         end["lon"]
+    #     )
+        
+       
+
+    #     self.nav_label.text = f"Расстояние: {dist:.4f} (условные единицы)"
+
+    #     def generate_intermediate_nodes(start, end):
+
+        
+
+    #         mid1 = {
+    #              "lat": start["lat"] + 0.001,
+    #              "lon": start["lon"]
+    #         }
+
+    #         mid2 = {
+    #             "lat": start["lat"] + 0.001,
+    #             "lon": end["lon"]
+    #         }
+
+    #         return [
+    #             start,
+    #             mid1,
+    #             mid2,
+    #             end
+    #         ]
+
+        # def add_generated_nodes_to_db(node_list):
+
+        #     node_ids = []
+
+        #     with get_db() as conn:
+        #         conn.row_factory = sqlite3.Row
+        #         cursor = conn.cursor()
+
+        #         prev_node_id = None
+        #         prev_lat = None
+        #         prev_lon = None
+
+        #         for node in node_list:
+
+        #             lat = node["lat"]
+        #             lon = node["lon"]
+
+        #             cursor.execute(
+        #                 """
+        #                 SELECT id
+        #                 FROM nodes
+        #                 WHERE ABS(lat - ?) < 0.0000001
+        #                 AND ABS(lon - ?) < 0.0000001
+        #                 """,
+        #                 (lat, lon)
+        #             )
+
+        #             row = cursor.fetchone()
+
+        #             if row:
+        #                 node_id = row["id"]
+        #             else:
+        #                 cursor.execute(
+        #                     """
+        #                     INSERT INTO nodes(lat, lon)
+        #                     VALUES (?, ?)
+        #                     """,
+        #                     (lat, lon)
+        #                 )
+        #             node_id = cursor.lastrowid
+
+        #             node_ids.append(node_id)
+
+        #             if prev_node_id is not None:
+
+        #                 dist = haversine_distance(
+        #                     prev_lat,
+        #                     prev_lon,
+        #                     lat,
+        #                     lon
+        #                 )
+
+        #                 walk_time = dist / 1.4
+
+        #                 cursor.execute(
+        #                     """
+        #                     SELECT id
+        #                     FROM edges
+        #                     WHERE from_node=?
+        #                     AND to_node=?
+        #                     """,
+        #                     (prev_node_id, node_id)
+        #                 )
+
+        #                 edge_exists = cursor.fetchone()
+
+        #                 if not edge_exists:
+
+        #                     cursor.execute(
+        #                         """
+        #                         INSERT INTO edges
+        #                         (
+        #                             from_node,
+        #                             to_node,
+        #                             distance,
+        #                             walk_time,
+        #                             is_bidirectional
+        #                         )
+        #                         VALUES (?, ?, ?, ?, ?)
+        #                         """,
+        #                         (
+        #                             prev_node_id,
+        #                             node_id,
+        #                             dist,
+        #                             walk_time,
+        #                             1
+        #                         )
+        #                     )
+
+        #                     cursor.execute(
+        #                     """
+        #                     INSERT INTO edges
+        #                     (
+        #                         from_node,
+        #                         to_node,
+        #                         distance,
+        #                         walk_time,
+        #                         is_bidirectional
+        #                     )
+        #                     VALUES (?, ?, ?, ?, ?)
+        #                     """,
+        #                     (
+        #                         node_id,
+        #                         prev_node_id,
+        #                         dist,
+        #                         walk_time,
+        #                         1
+        #                     )
+        #                 )
+
+        #             prev_node_id = node_id
+        #             prev_lat = lat
+        #             prev_lon = lon
+
+        #         conn.commit()
+
+        #     return node_ids
+
+
+        # gen_in=generate_intermediate_nodes(start, end)
+
+        # print(f"Generated intermediate nodes: {gen_in}")
+
+        # nodes=add_generated_nodes_to_db(gen_in)
+
+        # print(f"Generated node IDs: {nodes}")
+
+
+#------------------------------------------------------
+
+        # def add_generated_nodes_to_db(node_list):
+
+        #     node_ids = []
+
+        #     with get_db() as conn:
+        #         conn.row_factory = sqlite3.Row
+        #         cursor = conn.cursor()
+
+        #         prev_node_id = None
+        #         prev_lat = None
+        #         prev_lon = None
+
+        #         for node in node_list:
+
+        #             lat = node["lat"]
+        #             lon = node["lon"]
+
+        #             cursor.execute(
+        #             """
+        #             SELECT id
+        #             FROM nodes
+        #             WHERE ABS(lat - ?) < 0.0000001
+        #             AND ABS(lon - ?) < 0.0000001
+        #             """,
+        #             (lat, lon)
+        #             )
+
+        #             row = cursor.fetchone()
+
+        #             if row:
+        #                 node_id = row["id"]
+        #             else:
+        #                 cursor.execute(
+        #                  "INSERT INTO nodes (lat, lon) VALUES (?, ?)",
+        #                 (lat, lon)
+        #                 )
+        #                 node_id = cursor.lastrowid
+
+        #             node_ids.append(node_id)
+
+        #             if prev_node_id is not None:
+
+        #                 dist = haversine_distance(
+        #                     prev_lat,
+        #                     prev_lon,
+        #                     lat,
+        #                     lon
+        #                 )
+
+        #             walk_time = dist / 1.4
+
+        #             cursor.execute("""
+        #                 SELECT 1
+        #                 FROM edges
+        #                 WHERE from_node = ?
+        #                 AND to_node = ?
+        #                 """, (prev_node_id, node_id))
+
+        #             if not cursor.fetchone():
+
+        #                 cursor.execute(
+        #                     """
+        #                     INSERT INTO edges
+        #                     (
+        #                         from_node,
+        #                         to_node,
+        #                         distance,
+        #                         walk_time,
+        #                         is_bidirectional
+        #                     )
+        #                     VALUES (?, ?, ?, ?, ?)
+        #                     """,
+        #                     (
+        #                         prev_node_id,
+        #                         node_id,
+        #                         dist,
+        #                         walk_time,
+        #                         1
+        #                     )
+        #                 )
+
+        #                 cursor.execute(
+        #                     """
+        #                     INSERT INTO edges
+        #                     (
+        #                         from_node,
+        #                         to_node,
+        #                         distance,
+        #                         walk_time,
+        #                         is_bidirectional
+        #                     )
+        #                     VALUES (?, ?, ?, ?, ?)
+        #                     """,
+        #                     (
+        #                         node_id,
+        #                         prev_node_id,
+        #                         dist,
+        #                         walk_time,
+        #                         1
+        #                     )
+        #                 )
+
+        #         prev_node_id = node_id
+        #         prev_lat = lat
+        #         prev_lon = lon
+
+        #     conn.commit()
+
+        #     return node_ids
+
+
+        # def add_generated_nodes_to_db(node_list):
+   
+        #     node_ids = []
+        #     with get_db() as conn:
+        #         conn.row_factory = sqlite3.Row
+        #         cursor = conn.cursor()
+
+        #         prev_node_id = None
+        #         prev_lat, prev_lon = None, None
+
+        #         for node in node_list:
+        #             lat, lon = node["lat"], node["lon"]
+        #     # ищем существующий узел
+        #             cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (lat, lon))
+        #             row = cursor.fetchone()
+        #             if row:
+        #                 node_id = row["id"]
+        #             else:
+        #                 cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (lat, lon))
+        #                 node_id = cursor.lastrowid
+
+        #             node_ids.append(node_id)
+
+        #     # создаем ребро с предыдущим узлом
+        #             if prev_node_id is not None:
+        #                 dist = haversine_distance(prev_lat, prev_lon, lat, lon)
+        #                 walk_time = dist / 1.4
+        #                 cursor.execute(
+        #                 'INSERT OR IGNORE INTO edges (from_node,to_node,distance,walk_time,is_bidirectional) VALUES (?, ?, ?, ?, ?)',
+        #                 (prev_node_id, node_id, dist, walk_time, 1)
+        #                 )
+        #                 cursor.execute(
+        #                 'INSERT OR IGNORE INTO edges (from_node,to_node,distance,walk_time,is_bidirectional) VALUES (?, ?, ?, ?, ?)',
+        #                 (node_id, prev_node_id, dist, walk_time, 1)
+        #                 )
+
+        #             prev_node_id = node_id
+        #             prev_lat, prev_lon = lat, lon
+
+        #             conn.commit()
+
+        #     return node_ids    
+
+
+
+            # def generate_intermediate_nodes(start, end):
+    
+        #     nodes = [start]
+
+        #     for i in range(1, num_points+1):
+        #         frac = i / (num_points+1)
+        #         lat = start["lat"] + (end["lat"] - start["lat"]) * frac
+        #         lon = start["lon"] + (end["lon"] - start["lon"]) * frac
+        #         nodes.append({"lat": lat, "lon": lon})
+
+        #     nodes.append(end)
+        #     return nodes
+
+
+#--------------------------------------
+
+
+    #     def worker():
+    #         init_database()
+
+    #         nodes =generate_intermediate_nodes(start, end)
+    #         node_ids = add_generated_nodes_to_db(nodes)
+
+    #         with get_db() as conn:
+    #             cursor = conn.cursor()
+    #             cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (start["lat"], start["lon"]))
+    #             start_node = cursor.fetchone()
+    #             if start_node:
+    #                  start_node_id = start_node["id"]
+    #             else:
+    #                 cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (start["lat"], start["lon"]))
+    #                 start_node_id = cursor.lastrowid
+    #                 conn.commit()   
+
+    #             cursor.execute('SELECT id FROM nodes WHERE lat=? AND lon=?', (end["lat"], end["lon"]))
+    #             end_node = cursor.fetchone()
+    #             if end_node:
+    #                 end_node_id = end_node["id"]
+    #             else:
+    #                 cursor.execute('INSERT INTO nodes (lat, lon) VALUES (?, ?)', (end["lat"], end["lon"]))  
+    #                 end_node_id = cursor.lastrowid
+    #                 conn.commit()
+
+    #         graph = build_graph()
+    #         path, _ = dijkstra(graph, start_node_id, end_node_id, routing_type="fastest")
+            
+
+    #         route_coordinates = build_route_geometry(path)
+
+    #         print("Route coordinates:", route_coordinates)
+
+    #         route_steps=get_route_steps(path)
+
+    #         route_coordinates = [(step.start_location.lat, step.start_location.lon) for step in route_steps]
+
+    #         route_coordinates.append((route_steps[-1].end_location.lat, route_steps[-1].end_location.lon))
+
+    #         total_distance = sum(step.distance for step in route_steps)
+    #         total_duration = sum(step.duration for step in route_steps)
+
+
+    #         def update(dt):
+    #             if hasattr(self, "route_layer") and self.route_layer:
+    #                 self.map.remove_layer(self.route_layer)
+    #             self.route_layer = RouteLineLayer(self.map, route_coordinates)
+    #             self.map.add_layer(self.route_layer)
+    #             self.route_layer.reposition()
+    #             self.nav_label.text = f"Маршрут: {total_distance:.0f} м, примерно {int(total_duration / 60)} мин"
+    #             self.nav_label.text = f"Маршрут: {route_coordinates}"
+
+    #         Clock.schedule_once(update)
+    #     threading.Thread(target=worker, daemon=True).start()
 
        
             
        
 
-        def display_route(self, route_data):
-            summary = route_data.get("summary", {})
+    # def display_route(self, route_data):
+    #         app = App.get_running_app()
+    #         summary = route_data.get("summary", {})
+    #         print("Summary:", summary)
 
-            distance = summary.get("distance_meters", 0) / 1000
-            duration = summary.get("duration_seconds", 0) / 60
-            latest = app.nav_api.get_latest_location()
+    #         distance = summary.get("distance_meters", 0) / 1000
+    #         duration = summary.get("duration_seconds", 0) / 60
+    #         latest = app.route_api.save_location()
 
-            recent_count = 0
+    #         recent_count = 0
 
-            if latest:
-                recent_count = latest.get("recent_routes_count", 0)
+    #         if latest:
+    #             recent_count = latest.get("recent_routes_count", 0)
 
-            self.route_info.text = (
-              f"Расстояние: {distance:.2f} км\n"
-              f"Время: {duration:.1f} мин\n" 
-              f"Шагов: {summary.get('steps_count', 0)}"
-              f"Недавние маршруты: {recent_count}"
-              f"[ref=clear][color=0000ff]Очистить историю[/color][/ref]"
-            )
+    #         self.route_info.text = (
+    #           f"Расстояние: {distance:.2f} км\n"
+    #           f"Время: {duration:.1f} мин\n" 
+    #           f"Шагов: {summary.get('steps_count', 0)}"
+    #           f"Недавние маршруты: {recent_count}"
+    #           f"[ref=clear][color=0000ff]Очистить историю[/color][/ref]"
+    #         )
     
-    def on_ref_press(self, instance, ref):
-    
-        if ref == "clear":
-            result = app.nav_api.clear_location_history()
+    # def on_ref_press(self, instance, ref):
+    #     if ref == "clear":
+    #         def clear_worker():
+    #             result = app.route_api.clear_location_history()
+    #             # Обновляем информацию после очистки
+    #             Clock.schedule_once(lambda dt: self.display_route({"summary": {}}))
+    #     threading.Thread(target=clear_worker, daemon=True).start()
 
 
 
@@ -728,15 +1023,9 @@ class RouteScreen(Screen):
         self.bg.pos = self.pos
         self.bg.size = self.size
 
-
-
-
-    
-
-    
-    # def draw_route(self, route_coords):
-    #     self.route_layer = RouteLineLayer(self.map, route_coords)
-    #     self.map.add_layer(self.route_layer)
+    def draw_route(self, route_coords):
+        self.route_layer = RouteLineLayer(self.map, route_coords)
+        self.map.add_layer(self.route_layer)
 
 
     def load_map_style(self, style_id=1):
@@ -832,493 +1121,488 @@ class MainScreen(Screen):
 
 
 
+class RouteWindow(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
+        self.current_route_name = None
+        self.layout = BoxLayout(orientation='vertical', padding=20)
 
+        with self.canvas.before:
+            Color(1, 1, 1, 1)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
 
+        self.bind(pos=self.update_bg, size=self.update_bg)
 
+        self.title_label = Label(
+            text=" ",
+            font_size=14,
+            color=(0, 0, 0, 1),
+            size_hint_y=None,
+            height=50,
+            bold=True
+        )
 
+        self.layout.add_widget(self.title_label)
 
-#  Line Artist
+        self.route_info = Label(
+            text="",
+            font_size=12,
+            color=(0, 0, 0, 1),
+            size_hint_y=None,
+            height=100,
+            halign='left',
+            valign='top',
+            markup=True
+        )
+        self.route_info.bind(size=self.route_info.setter('text_size'),on_ref_press=self.on_ref_press)
+        self.layout.add_widget(self.route_info)
 
-# class RouteLineLayer(MapLayer):
-#     def __init__(self, mapview, route_points, **kwargs):
-#         super().__init__(**kwargs)
-#         self.mapview = mapview
-#         self.route_points = route_points
+        float_layout = FloatLayout()
 
-#     def reposition(self):
-#         self.canvas.clear()
+        self.btn_back = Button(
+            background_normal="exit.png",
+            background_down="exit.png",
+            size_hint=(None, None),
+            size=(60, 53),
+            pos=(730, 550)
+        )
 
-#         if not self.route_points:
-#             return
+        self.btn_go = Button(
+            background_normal="go.png",
+            background_down="go.png",
+            size_hint=(None, None),
+            size=(200, 50),
+            pos=(500, 600)
+        )
 
-#         with self.canvas:
-#             Color(1, 0, 0, 1)  
+        self.btn_go.bind(on_press=self.build_route)
+        self.btn_back.bind(
+            on_press=lambda x: setattr(App.get_running_app().sm, 'current', 'Популярные маршруты')
+        )
 
-#             points = []
-#             for lat, lon in self.route_points:
-#                 x, y = self.mapview.get_window_xy_from(lat, lon, self.mapview.zoom)
-#                 points.extend([x, y])
+        float_layout.add_widget(self.btn_back)
+        float_layout.add_widget(self.btn_go)
 
-#             Line(points=points, width=3)
-
-
-
-
-
-
-# class RouteWindow(Screen):
-    # def __init__(self, **kwargs):
-    #     super().__init__(**kwargs)
-
-    #     self.current_route_name = None
-    #     self.layout = BoxLayout(orientation='vertical', padding=20)
-
-    #     with self.canvas.before:
-    #         Color(1, 1, 1, 1)
-    #         self.bg = Rectangle(pos=self.pos, size=self.size)
-
-    #     self.bind(pos=self.update_bg, size=self.update_bg)
-
-    #     self.title_label = Label(
-    #         text=" ",
-    #         font_size=14,
-    #         color=(0, 0, 0, 1),
-    #         size_hint_y=None,
-    #         height=50,
-    #         bold=True
-    #     )
-
-    #     self.layout.add_widget(self.title_label)
-
-    #     self.route_info = Label(
-    #         text="",
-    #         font_size=12,
-    #         color=(0, 0, 0, 1),
-    #         size_hint_y=None,
-    #         height=100,
-    #         halign='left',
-    #         valign='top',
-    #         markup=True
-    #     )
-    #     self.route_info.bind(size=self.route_info.setter('text_size'),on_ref_press=self.on_ref_press)
-    #     self.layout.add_widget(self.route_info)
-
-    #     float_layout = FloatLayout()
-
-    #     self.btn_back = Button(
-    #         background_normal="exit.png",
-    #         background_down="exit.png",
-    #         size_hint=(None, None),
-    #         size=(60, 53),
-    #         pos=(730, 550)
-    #     )
-
-    #     self.btn_go = Button(
-    #         background_normal="go.png",
-    #         background_down="go.png",
-    #         size_hint=(None, None),
-    #         size=(200, 50),
-    #         pos=(500, 600)
-    #     )
-
-    #     self.btn_go.bind(on_press=self.build_route)
-    #     self.btn_back.bind(
-    #         on_press=lambda x: setattr(App.get_running_app().sm, 'current', 'Популярные маршруты')
-    #     )
-
-    #     float_layout.add_widget(self.btn_back)
-    #     float_layout.add_widget(self.btn_go)
-
-    #     self.layout.add_widget(float_layout)
-    #     self.add_widget(self.layout)
+        self.layout.add_widget(float_layout)
+        self.add_widget(self.layout)
 
    
-    # def build_route(self, instance):
+    def build_route(self, instance):
         
 
-    #     start = app.selected_start
-    #     end = app.selected_end
+        start = app.selected_start
+        end = app.selected_end
 
        
 
-    #     def distance(lat1, lon1, lat2, lon2):
-    #         return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
+        def distance(lat1, lon1, lat2, lon2):
+            return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
 
         
-    #     app.nav_api.create_node(start["lat"], start["lon"])
-    #     app.nav_api.create_node(end["lat"], end["lon"])
+        app.nav_api.create_node(start["lat"], start["lon"])
+        app.nav_api.create_node(end["lat"], end["lon"])
 
         
-    #     nodes = app.nav_api.get_nodes()
-    #     edges = app.nav_api.get_edges()
+        nodes = app.nav_api.get_nodes()
+        edges = app.nav_api.get_edges()
 
 
-    #     nodes = nodes["data"]
-    #     edges = edges["data"]
+        nodes = nodes["data"]
+        edges = edges["data"]
 
-    #     node_map = {n["id"]: n for n in nodes}
+        node_map = {n["id"]: n for n in nodes}
 
-    #     edge_nodes = set()
-    #     for edge in edges:
-    #         edge_nodes.add(edge["from_node"])
-    #         edge_nodes.add(edge["to_node"])
+        edge_nodes = set()
+        for edge in edges:
+            edge_nodes.add(edge["from_node"])
+            edge_nodes.add(edge["to_node"])
 
         
-    #     def find_nearest(lat, lon):
-    #         best_node = None
-    #         best_dist = float("inf")
+        def find_nearest(lat, lon):
+            best_node = None
+            best_dist = float("inf")
 
-    #         for node_id in edge_nodes:
-    #             node = node_map.get(node_id)
-    #             if not node:
-    #                 continue
+            for node_id in edge_nodes:
+                node = node_map.get(node_id)
+                if not node:
+                    continue
 
-    #             d = distance(lat, lon, node["lat"], node["lon"])
+                d = distance(lat, lon, node["lat"], node["lon"])
 
-    #             if d < best_dist:
-    #                 best_dist = d
-    #                 best_node = node
+                if d < best_dist:
+                    best_dist = d
+                    best_node = node
 
-    #         return best_node
+            return best_node
 
-    #     start_node = find_nearest(start["lat"], start["lon"])
-    #     end_node = find_nearest(end["lat"], end["lon"])
+        start_node = find_nearest(start["lat"], start["lon"])
+        end_node = find_nearest(end["lat"], end["lon"])
 
 
-    #     return app.nav_api.calculate_route(start_lat=start_node["lat"],start_lon=start_node["lon"],
-    #         end_lat=end_node["lat"],
-    #         end_lon=end_node["lon"]
-    #     )
+        return app.nav_api.calculate_route(start_lat=start_node["lat"],start_lon=start_node["lon"],
+            end_lat=end_node["lat"],
+            end_lon=end_node["lon"]
+        )
 
     
-    # def on_touch_down(self, touch):
-    #     if touch.is_double_tap:
+    def on_touch_down(self, touch):
+        if touch.is_double_tap:
             
 
-    #         start = app.selected_start
-    #         end = app.selected_end
+            start = app.selected_start
+            end = app.selected_end
 
             
 
-    #         return app.nav_api.get_route_with_map(
-    #             start_lat=start["lat"],
-    #             start_lon=start["lon"]
-    #             end_lat=end["lat"],
-    #             end_lon=end["lon"]
-    #         )
+            return app.nav_api.get_route_with_map(
+                start_lat=start["lat"],
+                start_lon=start["lon"],
+                end_lat=end["lat"],
+                end_lon=end["lon"]
+            )
 
 
-    #     return super().on_touch_down(touch)
+        return super().on_touch_down(touch)
     
 
-    # def double_touch(instance, touch):
-    #     if not touch.is_double_tap:
+    def double_touch(instance, touch):
+        if not touch.is_double_tap:
             
 
-    #         selected = app.selected_coords
-    #         end = app.selected_end
+            selected = app.selected_coords
+            end = app.selected_end
 
-    #         app.nav_api.create_node(selected["lat"], selected["lon"])
-    #         app.nav_api.create_node(end["lat"], end["lon"])
+            app.nav_api.create_node(selected["lat"], selected["lon"])
+            app.nav_api.create_node(end["lat"], end["lon"])
 
-    #         nodes = app.nav_api.get_nodes()
-    #         edges = app.nav_api.get_edges()
-
-    
-
-    #         nodes = nodes["data"]
-    #         edges = edges["data"]
+            nodes = app.nav_api.get_nodes()
+            edges = app.nav_api.get_edges()
 
     
-    #         node_map = {n["id"]: n for n in nodes}
+
+            nodes = nodes["data"]
+            edges = edges["data"]
+
+    
+            node_map = {n["id"]: n for n in nodes}
 
    
-    #         edge_nodes = set()
+            edge_nodes = set()
 
-    #         for edge in edges:
-    #             edge_nodes.add(edge["from_node"])
-    #             edge_nodes.add(edge["to_node"])
+            for edge in edges:
+                edge_nodes.add(edge["from_node"])
+                edge_nodes.add(edge["to_node"])
 
     
-    #     def distance(lat1, lon1, lat2, lon2):
-    #         return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
+        def distance(lat1, lon1, lat2, lon2):
+            return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
 
   
-    #     def find_nearest(lat, lon):
-    #         best_node = None
-    #         best_dist = float("inf")
+        def find_nearest(lat, lon):
+            best_node = None
+            best_dist = float("inf")
 
-    #         for node_id in edge_nodes:
-    #             node = node_map.get(node_id)
+            for node_id in edge_nodes:
+                node = node_map.get(node_id)
                       
-    #         d = distance(lat, lon, node["lat"], node["lon"])
+            d = distance(lat, lon, node["lat"], node["lon"])
 
-    #         if d < best_dist:
-    #             best_dist = d
-    #             best_node = node
+            if d < best_dist:
+                best_dist = d
+                best_node = node
 
-    #         return best_node
+            return best_node
 
     
         
-    #     end_node = find_nearest(end["lat"], end["lon"])
+        end_node = find_nearest(end["lat"], end["lon"])
 
     
     
-    #     return app.nav_api.calculate_route_from_current(
-    #         end_lat=end_node["lat"],
-    #         end_lon=end_node["lon"]
-    # )
+        return app.nav_api.calculate_route_from_current(
+            end_lat=end_node["lat"],
+            end_lon=end_node["lon"]
+    )
     
-    # def load_route_data(self, route_id):
-    #     app = App.get_running_app()
+    def load_route_data(self, route_id):
+        app = App.get_running_app()
 
-    #     routes_coords = {
-    #         "Красная площадь": (55.7558, 37.6173, 55.7520, 37.6175),
-    #         "Парк Сокольники": (55.7904, 37.6707, 55.7950, 37.6750),
-    #     }
+        routes_coords = {
+            "Красная площадь": (55.7558, 37.6173, 55.7520, 37.6175),
+            "Парк Сокольники": (55.7904, 37.6707, 55.7950, 37.6750),
+        }
 
-    #     if route_id not in routes_coords:
-    #         return
+        if route_id not in routes_coords:
+            return
 
-    #     coords = routes_coords[route_id]
+        coords = routes_coords[route_id]
 
-    #     def fetch():
-    #         data = app.api_client.get_map_with_route(
-    #             start_lat=coords[0],
-    #             start_lon=coords[1],
-    #             end_lat=coords[2],
-    #             end_lon=coords[3],
-    #             routing_type="fastest"
-    #         )
+        def fetch():
+            data = app.api_client.get_map_with_route(
+                start_lat=coords[0],
+                start_lon=coords[1],
+                end_lat=coords[2],
+                end_lon=coords[3],
+                routing_type="fastest"
+            )
 
-    #         if data:
-    #             Clock.schedule_once(lambda dt: self.display_route(data), 0)
+            if data:
+                Clock.schedule_once(lambda dt: self.display_route(data), 0)
 
-    #     threading.Thread(target=fetch, daemon=True).start()
+        threading.Thread(target=fetch, daemon=True).start()
 
 
 # Route Window
 
-# class RouteWindow(Screen):
-#         def __init__(self, **kwargs):
-#             super().__init__(**kwargs)
+class RouteLineLayer(MapLayer):
+    def __init__(self, mapview, route_points, **kwargs):
+        super().__init__(**kwargs)
+        self.mapview = mapview
+        self.route_points = route_points
 
-#             layout = BoxLayout(orientation='vertical')
+    def reposition(self):
+        self.canvas.clear()
 
-#             self.map = MapView(
-#                 lat=55.751244,
-#                 lon=37.618423,
-#                 zoom=12
-#            )
-#             layout.add_widget(self.map)
+        if not self.route_points:
+            return
 
-#             btn_go = Button(
-#                 background_normal="go.png",
-#                 background_down="go.png",
-#                 size_hint=(1, 0.1)
-#             )
+        with self.canvas:
+            Color(1, 0, 0, 1)  
 
-#             btn_go.bind(on_press=self.build_route)  
-#             layout.add_widget(btn_go)
+            points = []
+            for lat, lon in self.route_points:
+                x, y = self.mapview.get_window_xy_from(lat, lon, self.mapview.zoom)
+                points.extend([x, y])
 
-#             self.add_widget(layout)
+            Line(points=points, width=3)
+
+
+
+
+class RouteWindow(Screen):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        layout = BoxLayout(orientation="vertical")
+
+        self.map = MapView(
+            lat=55.751244,
+            lon=37.618423,
+            zoom=12
+        )
+
+        layout.add_widget(self.map)
+
+        btn_go = Button(
+            background_normal="go.png",
+            background_down="go.png",
+            size_hint=(1, 0.1)
+        )
+
+        btn_go.bind(on_press=self.build_route)
+
+        layout.add_widget(btn_go)
+
+        self.add_widget(layout)
+
+    def build_route(self, instance):
+
+        app = App.get_running_app()
+
+        start = app.selected_start
+        end = app.selected_end
+
+        def worker():
+
+            nodes_response = app.nav_api.get_nodes()
+            edges_response = app.nav_api.get_edges()
+
+            nodes = nodes_response["data"]
+            edges = edges_response["data"]
+
+            node_map = {n["id"]: n for n in nodes}
+
+            def distance(a, b, c, d):
+                return (a - c) ** 2 + (b - d) ** 2
+
+            def nearest(lat, lon):
+
+                best_node = None
+                best_dist = float("inf")
+
+                for edge in edges:
+
+                    for nid in (edge["from_node"], edge["to_node"]):
+
+                        node = node_map.get(nid)
+
+                        if not node:
+                            continue
+
+                        d = distance(
+                            lat,
+                            lon,
+                            node["lat"],
+                            node["lon"]
+                        )
+
+                        if d < best_dist:
+                            best_dist = d
+                            best_node = node
+
+                return best_node
+
+            start_node = nearest(
+                start["lat"],
+                start["lon"]
+            )
+
+            end_node = nearest(
+                end["lat"],
+                end["lon"]
+            )
+
+            if not start_node or not end_node:
+                return
+
+            route = app.nav_api.calculate_route(
+                start_lat=start_node["lat"],
+                start_lon=start_node["lon"],
+                end_lat=end_node["lat"],
+                end_lon=end_node["lon"]
+            )
+
+            if not route:
+                return
+
+            coords = route.get(
+                "geometry",
+                {}
+            ).get(
+                "coordinates",
+                []
+            )
+
+            route_points = [
+                (lat, lon)
+                for lon, lat in coords
+            ]
+
+            def update_ui(dt):
+
+                if not route_points:
+                    return
+
+                self.draw_route(route_points)
+
+            Clock.schedule_once(update_ui)
+
+        threading.Thread(
+            target=worker,
+            daemon=True
+        ).start()
+
+    def draw_route(self, route_points):
+
+        if hasattr(self, "route_layer"):
+
+            try:
+                self.map.remove_layer(
+                    self.route_layer
+                )
+            except:
+                pass
+
+        self.route_layer = RouteLineLayer(
+            self.map,
+            route_points
+        )
+
+        self.map.add_layer(
+            self.route_layer
+        )
+
+        self.route_layer.reposition()
+
+    def double_touch(self, touch):
+
+        if not touch.is_double_tap:
+            return super().on_touch_down(touch)
+
+        app = App.get_running_app()
+
+        lat, lon = self.pixel_to_latlon(
+            *touch.pos
+        )
+
+        nodes_response = app.nav_api.get_nodes()
+        edges_response = app.nav_api.get_edges()
+
+        nodes = nodes_response["data"]
+        edges = edges_response["data"]
+
+        node_map = {
+            n["id"]: n
+            for n in nodes
+        }
+
+        edge_nodes = set()
+
+        for edge in edges:
+            edge_nodes.add(edge["from_node"])
+            edge_nodes.add(edge["to_node"])
+
+        def distance(lat1, lon1, lat2, lon2):
+            return (
+                (lat1 - lat2) ** 2 +
+                (lon1 - lon2) ** 2
+            )
+
+        def find_nearest(lat, lon):
+
+            best_node = None
+            best_dist = float("inf")
+
+            for node_id in edge_nodes:
+
+                node = node_map.get(node_id)
+
+                if not node:
+                    continue
+
+                d = distance(
+                    lat,
+                    lon,
+                    node["lat"],
+                    node["lon"]
+                )
+
+                if d < best_dist:
+                    best_dist = d
+                    best_node = node
+
+            return best_node
+
+        end_node = find_nearest(
+            lat,
+            lon
+        )
+
+        if not end_node:
+            return
+
+        route = app.nav_api.calculate_route_from_current(
+            end_lat=end_node["lat"],
+            end_lon=end_node["lon"]
+        )
+
+        return route
+
+
 
    
-#         def build_route(self, instance):
-#             app = App.get_running_app()
-
-#             start = app.selected_start
-#             end = app.selected_end
-
-            
-            
-
-#             def worker():
-                
-#                     nodes = app.nav_api.get_nodes()
-#                     edges = app.nav_api.get_edges()
-
-
-#                     nodes = nodes["data"]
-#                     edges = edges["data"]
-
-#                     node_map = {n["id"]: n for n in nodes}
-
-#                     def dist(a, b, c, d):
-#                         return (a - c) ** 2 + (b - d) ** 2
-
-#                     def nearest(lat, lon):
-#                         best = None
-#                         best_d = float("inf")
-
-#                         for e in edges:
-#                             for nid in (e["from_node"], e["to_node"]):
-#                                 node = node_map.get(nid)
-#                                 if not node:
-#                                     continue
-
-#                             d = dist(lat, lon, node["lat"], node["lon"])
-
-#                             if d < best_d:
-#                                 best_d = d
-#                                 best = node
-
-#                             return best
-
-#                     start_node = nearest(start["lat"], start["lon"])
-#                     end_node = nearest(end["lat"], end["lon"])
-                
-                
-                
-#                     route = app.nav_api.calculate_route(
-#                     start_lat=start_node["lat"],
-#                     start_lon=start_node["lon"],
-#                     end_lat=end_node["lat"],
-#                     end_lon=end_node["lon"]
-#                     )
-
-            
-
-#                     coords = route.get("geometry", {}).get("coordinates", [])
-
-#                     route_points = [(lat, lon) for lon, lat in coords]
-
-#                     def update_ui(dt):
-#                         self.draw_route(route_points)
-
-#                     Clock.schedule_once(update_ui, 0)
-
-#             threading.Thread(target=worker, daemon=True).start()
-
-#         def draw_route(self, route_points):
-#             self.map.add_layer(RouteLineLayer(self.map, route_points))   
-
-
-           
-        #     def update_ui(dt):
-        #         if not route:
-        #             self.route_info.text = "Ошибка маршрута"
-        #             return
-
-        #         summary = route.get("summary", {})
-
-        #         dist = summary.get("distance_meters", 0) / 1000
-        #         dur = summary.get("duration_seconds", 0) / 60
-
-        #         self.route_info.text = f"{dist:.2f} км | {dur:.1f} мин"
-
-                
-        #         geometry = route.get("geometry", [])
-
-        #         if geometry:
-        #             points = [(p["lat"], p["lon"]) for p in geometry]
-
-        #             layer = RouteLineLayer(points)
-        #             self.map.add_layer(layer)
-
-        #     Clock.schedule_once(update_ui, 0)
-
-        # threading.Thread(target=worker, daemon=True).start()
-
-    # def double_touch(self, touch):
-    #     if not touch.is_double_tap:
-    #         return super().on_touch_down(touch)
-
-    #     app = App.get_running_app()
-
-    # # 👉 перевод клика в координаты
-    #     lat, lon = self.pixel_to_latlon(*touch.pos)
-
-    # # 👉 создаем узел назначения
-    #     app.nav_api.create_node(lat, lon)
-
-    # # 👉 получаем граф
-    #     nodes = app.nav_api.get_nodes()
-    #     edges = app.nav_api.get_edges()
-
-
-    #     nodes = nodes["data"]
-    #     edges = edges["data"]
-
-    # # 👉 словарь узлов
-    #     node_map = {n["id"]: n for n in nodes}
-
-    # # 👉 только узлы, участвующие в рёбрах
-    #     edge_nodes = set()
-    #     for edge in edges:
-    #         edge_nodes.add(edge["from_node"])
-    #         edge_nodes.add(edge["to_node"])
-
-    # # 👉 расстояние
-    #     def distance(lat1, lon1, lat2, lon2):
-    #         return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
-
-    # # 👉 поиск ближайшего узла
-    #     def find_nearest(lat, lon):
-    #         best_node = None
-    #         best_dist = float("inf")
-
-    #         for node_id in edge_nodes:
-    #             node = node_map.get(node_id)
-    #             if not node:
-    #                 continue
-
-    #             d = distance(lat, lon, node["lat"], node["lon"])
-
-    #             if d < best_dist:
-    #                 best_dist = d
-    #                 best_node = node
-
-    #         return best_node
-
-    
-    #     end_node = find_nearest(lat, lon)
-
-    
-
-    
-    #     route = app.nav_api.calculate_route_from_current(
-    #         end_lat=end_node["lat"],
-    #         end_lon=end_node["lon"]
-    #     )
-
-      
-
-    #     return route
-
-
-
-        # def display_route(self, route_data):
-        #     summary = route_data.get("summary", {})
-
-        #     distance = summary.get("distance_meters", 0) / 1000
-        #     duration = summary.get("duration_seconds", 0) / 60
-        #     latest = app.nav_api.get_latest_location()
-
-        #     recent_count = 0
-
-        #     if latest:
-        #         recent_count = latest.get("recent_routes_count", 0)
-
-        #     self.route_info.text = (
-        #     f"Расстояние: {distance:.2f} км\n"
-        #     f"Время: {duration:.1f} мин\n"
-        #     f"Шагов: {summary.get('steps_count', 0)}"
-        #     f"Недавние маршруты: {recent_count}"
-        #     f"[ref=clear][color=0000ff]Очистить историю[/color][/ref]"
-        # )
-    
-        # def on_ref_press(self, instance, ref):
-        #     if ref == "clear":
-        #         result = app.nav_api.clear_location_history()
-
-
-
-        # def update_bg(self, *args):
-        #     self.bg.pos = self.pos
-        #     self.bg.size = self.size
 
 
 
